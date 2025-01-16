@@ -1,0 +1,41 @@
+/*Writing dts file for i2c- Ramanujan SOC*/
+/dts-v1/;   //DTS version-1 (DTS file format)
+/{
+	compatible = "mirafra_ramanujan_SOC","mfr_soc";
+	#address-cells = <1>; //cells for 32 bit address //cell is 32-bit integer
+	//#address-cells = <2>; //cells for 64 bit address
+	#size-cells = <1>; 
+	
+	i2c:i2c{
+		i2c0:i2c0@00004000{
+			compatible = "mfr_i2c0";
+			reg = < 0x00004000 , 0x100 >;
+			#address-cells = < 1 >;   
+			#size-cells = < 0 >;
+			status = "disabled";
+			//interrupt 
+                        //clocks 
+                        //clock-frequency
+		};
+		i2c1:i2c1@00004100{
+                        compatible = "mfr_i2c0";
+                        reg = < 0x00004100 , 0x100 >;
+                        #address-cells = < 1 >;
+                        #size-cells = < 0 >;
+                        status = "disabled";
+                        //interrupt 
+                        //clocks 
+                        //clock-frequency 
+                };
+		i2c2:i2c2@00004200{
+                        compatible = "mfr_i2c0";
+                        reg = < 0x00004200 , 0x100 >;
+                        #address-cells = < 1 >;
+                        #size-cells = < 0 >;
+                        status = "disabled";
+			//interrupt 
+                        //clocks 
+			//clock-frequency
+                };
+	};
+};
