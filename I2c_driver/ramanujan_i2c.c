@@ -13,12 +13,21 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
+#define I2C_CONTROL_REG 0x00
+#define I2C_STATUS_REG 0x04
+#define I2C_DLEN_REG 0x08
+#define I2C_SLAVE_ADDR_REG 0x0C
+#define I2C_DATA_FIFO_REG 0x10
+#define I2C_CLK_DEV_REG 0x14
+#define I2C_DATA_DELAY_REG 0x18
+#define I2C_CLK_STRETCH 0x1C
 
-
-
-
-
-
+struct i2c_device{
+	void __iomem *base;
+	int irq;
+	struct i2c_adapter adap;
+	struct completion xfer_done;
+};
 
 
 /*Driver Metadata*/
