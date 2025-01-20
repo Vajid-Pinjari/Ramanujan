@@ -14,6 +14,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
+#define THIS_MODULE "mfr_i2c"
 #define I2C_CONTROL_REG    0x00
 #define I2C_STATUS_REG     0x04
 #define I2C_DLEN_REG       0x08
@@ -66,6 +67,49 @@ struct mfr_i2c_device{
 	struct clk *bus_clk;
 };
 
+static struct clk *bcm2835_i2c_register_div(struct device *dev,
+					struct clk *mclk,
+					struct mfr_i2c_dev *i2c_dev)
+{
+	static struct clk *my_new_soc_i2c_register_div(struct device *dev,
+                                               struct clk *mclk,
+                                               struct my_new_soc_i2c_dev *i2c_dev)
+{
+    struct clk_init_data init;
+    struct clk_mfr_i2c *priv;
+    char name[32];
+    const char *mclk_name;
+
+    // Generating a name for the new clock
+    snprintf(name, sizeof(name), "%s_div", dev_name(dev));
+
+    // Fetch the parent clock name
+    mclk_name = __clk_get_name(mclk);
+
+    // Initialize the clock setup data
+    init.ops = &clk_mfr_i2c_ops;  // Use the new SoC's clock ops
+    init.name = name;
+    init.parent_names = (const char* []) { mclk_name };
+    init.num_parents = 1;
+    init.flags = 0;
+
+    // Allocate memory for the clock structure (specific to your new SoC)
+    priv = devm_kzalloc(dev, sizeof(struct clk_my_new_soc_i2c), GFP_KERNEL);
+    if (priv == NULL)
+        return ERR_PTR(-ENOMEM);
+
+    // Setup the hardware clock structure
+    priv->hw.init = &init;
+    priv->i2c_dev = i2c_dev;
+
+    // Register the clock with the device
+    clk_hw_register_clkdev(&priv->hw, "div", dev_name(dev));
+
+    // Register the clock with the kernel (adjusted for your SoC)
+    return devm_clk_register(dev, &priv->hw);
+}
+
+}
 
 static int mfr_i2c_probe(struct platform_device *pdev)
 {
@@ -85,8 +129,22 @@ static int mfr_i2c_probe(struct platform_device *pdev)
 	i2c_dev->regs = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
 	if(IS_ERR(i2c_dev->regs))
 		return PTR_ERR(i2c_dev->regs);
-
 	
+	mclk = devm_clk_get(&pdev->dev, NULL);
+	if (IS_ERR(mclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(mclk),
+				     "Could not get clock\n");
+
+	i2c_dev->bus_clk = mfr_i2c_register_div(&pdev,mclk,i2c_dev);
+	if(IS_ERR(i2c_dev->bus_clk))
+	return dev_err_probe(&pdev,PTR_ERR(i2c_dev->bus_clk), "Could not register clock\n");
+
+	ret = of_property_read_u32(pdev->dev.of_node, "clock-frequency",&bus_clk_rate);
+	if (ret < 0) {
+		dev_warn(&pdev->dev,
+			 "Could not read clock-frequency property\n");
+		bus_clk_rate = I2C_MAX_STANDARD_MODE_FREQ;
+	}
 
 }
 

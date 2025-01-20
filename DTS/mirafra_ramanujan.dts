@@ -15,7 +15,7 @@
 			status = "disabled";
 			//interrupt 
                         //clocks
-			clocks = < &i2c_clock 
+			clocks = < &i2c_clock > 
                         //clock-frequency
 		};
 		i2c1:i2c1@00004100{
