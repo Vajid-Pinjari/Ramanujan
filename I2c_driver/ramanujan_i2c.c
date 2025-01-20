@@ -50,10 +50,10 @@
 #define I2C_REDL_SHIFT	0  //Rising Edge Delay.
 
 //I2C CDIV Register
-/* Unreferenced 
-#define BCM2835_I2C_CDIV_MIN	0x0002
-#define BCM2835_I2C_CDIV_MAX	0xFFFE
-*/
+/* Unreferenced */
+#define I2C_CDIV_MIN	0x0002
+#define I2C_CDIV_MAX	0xFFFE
+
 
 
 
@@ -67,13 +67,70 @@ struct mfr_i2c_device{
 	struct clk *bus_clk;
 };
 
-static struct clk *bcm2835_i2c_register_div(struct device *dev,
+#define to_clk_mfr_i2c(_hw) container_of(_hw, struct clk_mfr_i2c, hw)
+struct clk_mfr_i2c {
+	struct clk_hw hw;
+	struct mfr_i2c_dev *i2c_dev;
+};
+
+static int clk_mfr_i2c_set_rate(struct clk_hw *hw, unsigned long rate,
+				unsigned long parent_rate)
+{
+	struct clk_mfr_i2c *div = to_clk_mfr_i2c(hw);
+	u32 redl, fedl;
+	u32 divider = clk_mfr_i2c_calc_divider(rate, parent_rate);
+
+	if (divider == -EINVAL)
+		return -EINVAL;
+
+	mfr_i2c_writel(div->i2c_dev,I2C_CLK_DEV_REG, divider);
+
+	/*
+	 * Number of core clocks to wait after falling edge before
+	 * outputting the next data bit.  Note that both FEDL and REDL
+	 * can't be greater than CDIV/2.
+	 */
+	fedl = max(divider / 16, 1u);
+
+	/*
+	 * Number of core clocks to wait after rising edge before
+	 * sampling the next incoming data bit.
+	 */
+	redl = max(divider / 4, 1u);
+
+	mfr_i2c_writel(div->i2c_dev, I2C_DATA_DELAY_REG,
+			   (fedl << I2C_FEDL_SHIFT) |
+			   (redl << I2C_REDL_SHIFT));
+	return 0;
+}
+
+static long clk_mfr_i2c_round_rate(struct clk_hw *hw, unsigned long rate,
+				unsigned long *parent_rate)
+{
+	u32 divider = clk_mfr_i2c_calc_divider(rate, *parent_rate);
+
+	return DIV_ROUND_UP(*parent_rate, divider);
+}
+
+
+static unsigned long clk_mfr_i2c_recalc_rate(struct clk_hw *hw,
+						unsigned long parent_rate)
+{
+	struct clk_mfr_i2c *div = to_clk_mfr_i2c(hw);
+	u32 divider = mfr_i2c_readl(div->i2c_dev, I2C_CLK_DEV_REG);
+
+	return DIV_ROUND_UP(parent_rate, divider);
+}
+static const struct clk_ops clk_mfr_i2c_ops = {
+	.set_rate = clk_mfr_i2c_set_rate,
+	.round_rate = clk_mfr_i2c_round_rate,
+	.recalc_rate = clk_mfr_i2c_recalc_rate,
+};
+
+
+static struct clk *mfr_i2c_register_div(struct device *dev,
 					struct clk *mclk,
 					struct mfr_i2c_dev *i2c_dev)
-{
-	static struct clk *my_new_soc_i2c_register_div(struct device *dev,
-                                               struct clk *mclk,
-                                               struct my_new_soc_i2c_dev *i2c_dev)
 {
     struct clk_init_data init;
     struct clk_mfr_i2c *priv;
@@ -94,7 +151,7 @@ static struct clk *bcm2835_i2c_register_div(struct device *dev,
     init.flags = 0;
 
     // Allocate memory for the clock structure (specific to your new SoC)
-    priv = devm_kzalloc(dev, sizeof(struct clk_my_new_soc_i2c), GFP_KERNEL);
+    priv = devm_kzalloc(dev, sizeof(struct clk_mfr_i2c), GFP_KERNEL);
     if (priv == NULL)
         return ERR_PTR(-ENOMEM);
 
@@ -109,7 +166,6 @@ static struct clk *bcm2835_i2c_register_div(struct device *dev,
     return devm_clk_register(dev, &priv->hw);
 }
 
-}
 
 static int mfr_i2c_probe(struct platform_device *pdev)
 {
