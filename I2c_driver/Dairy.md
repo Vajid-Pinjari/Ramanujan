@@ -22,9 +22,14 @@ Date : 20/01/25
 >i2c algo. functionalities.
 
 /*Before meeting*/
->devm_clk_get //to get mclk (clock resource)
->mfr_i2c_register_div //to get bus_clk
-
-
-
-
+> devm_clk_get //to get mclk (clock resource)
+> mfr_i2c_register_div //to get bus_clk
+> writing clock function.
+   -> Writing mfr_i2c_register_dev();//clk devider function
+   -> Written  struct clk_mfr_i2c
+   -> initializes clk_ops
+   -> written hw parametr function of clock
+     * clk_mfr_i2c_set_rate,
+     * clk_mfr_i2c_round_rate,
+     * clk_mfr_i2c_recalc_rate
+ -> container_of
