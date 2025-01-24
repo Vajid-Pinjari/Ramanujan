@@ -61,10 +61,14 @@ struct mfr_i2c_device{
 	struct device *dev;
 	void __iomem *regs;
 	int irq;
-	struct i2c_adapter adap;
+	struct i2c_adapter adapter;
 	struct completion completion;
 	struct i2c_msg *curr_msg;
 	struct clk *bus_clk;
+	int num_msgs;
+	u32 msg_err;
+	u8 *msg_buf;
+	size_t msg_buf_remaining;
 };
 
 
@@ -72,7 +76,53 @@ struct mfr_i2c_device{
 
 static int mfr_i2c_probe(struct platform_device *pdev)
 {
+    struct bcm2835_i2c_dev *i2c_dev;
+    int ret;
+    struct i2c_adapter *adap;
+    struct clk *mclk;
+    u32 bus_clk_rate;
+
+    // Step 1: Allocate and initialize memory for the device structure
+	
+    // Step 2: Store the device structure for future reference
+	
+    // Step 3: Initialize device-specific completion mechanism
+
+    // Step 4: Map hardware registers for I2C
+	
+    // Step 5: Get the main clock for the device
+
+    // Step 6: Register and configure the bus clock divider
+	
+    // Step 7: Read the clock frequency from the device tree
+	
+    //         (default to standard I2C frequency if unavailable)
+
+    // Step 8: Set the exclusive clock rate for the I2C bus
+	
+    // Step 9: Prepare and enable the clock for use
+
+    // Step 10: Retrieve the interrupt line for the device
+	
+    // Step 11: Request an IRQ and set the ISR for handling interrupts
+
+    // Step 12: Initialize the I2C adapter structure
+	
+    // Step 13: Set adapter metadata (name, owner, algorithm, parent, etc.)
+	
+    // Step 14: Register the adapter with the I2C subsystem
+
+    // Step 15: Configure hardware registers (disable clock stretching timeout)
+	
+    // Step 16: Write default configurations to hardware registers
+
+    // Step 17: Add the adapter to the I2C framework
+	
+    // Error Handling: Free IRQ, disable clock, and cleanup on failure
+
+    return 0;
 }
+
 static int mfr_i2c_remove(struct platform_device *pdev)
 {
 	
