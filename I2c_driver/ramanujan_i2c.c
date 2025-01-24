@@ -111,5 +111,5 @@ module_platform_driver(i2c_platform_driver);
 
 /*Driver Metadata*/
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Ramanujan SOC :Vajid-Mirafra");
+MODULE_AUTHOR("Ramanujan SOC :Mirafra");
 MODULE_DESCRIPTION("I2C Driver for RAMANUJAN");
