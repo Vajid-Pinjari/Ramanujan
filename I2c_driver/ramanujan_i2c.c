@@ -33,7 +33,7 @@ struct mfr_i2c_device{
 
 static int mfr_i2c_probe(struct platform_device *pdev)
 {
-    struct bcm2835_i2c_dev *i2c_dev;
+    struct mfr_i2c_dev *i2c_dev;
     int ret;
     struct i2c_adapter *adap;
     struct clk *mclk;
