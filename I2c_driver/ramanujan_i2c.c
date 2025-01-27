@@ -40,12 +40,21 @@ static int mfr_i2c_probe(struct platform_device *pdev)
     u32 bus_clk_rate;
 
     // Step 1: Allocate and initialize memory for the device structure
+    i2c_dev = devm_kzalloc(&pdev->dev, sizeof(*i2c_dev),GFP_KERNEL);
+    if(! i2c_dev)
+	    return -ENOMEM;	
 	
     // Step 2: Store the device structure for future reference
+    platform_set_drvdata(pdev,i2c_dev);
+    i2c_dev->dev = pdev->dev;
 	
     // Step 3: Initialize device-specific completion mechanism
-
+    init_completion(&i2c_dev->completion);
+	
     // Step 4: Map hardware registers for I2C
+    i2c_dev->regs = devm_platform_get_and_ioremap_resource(pdev,0,NULL);
+    if(IS_ERR(i2c_dev->regs))
+    
 	
     // Step 5: Get the main clock for the device
 
