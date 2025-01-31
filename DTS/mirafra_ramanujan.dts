@@ -1,42 +1,49 @@
-/*Writing dts file for i2c- Ramanujan SOC*/
-/dts-v1/;   //DTS version-1 (DTS file format)
+/dts-v1/;
 /{
-	compatible = "mirafra_ramanujan_SOC","mfr_soc";
-	#address-cells = <1>; //cells for 32 bit address //cell is 32-bit integer
-	//#address-cells = <2>; //cells for 64 bit address
-	#size-cells = <1>; 
-	
-	i2c:i2c{
-		i2c0:i2c0@00004000{
-			compatible = "mfr_i2c0";
-			reg = < 0x00004000 , 0x100 >;
-			#address-cells = < 1 >;   
-			#size-cells = < 0 >;
-			status = "disabled";
-			//interrupt 
-                        //clocks
-			clocks = < &i2c_clock > 
-                        //clock-frequency
-		};
-		i2c1:i2c1@00004100{
-                        compatible = "mfr_i2c0";
-                        reg = < 0x00004100 , 0x100 >;
-                        #address-cells = < 1 >;
-                        #size-cells = < 0 >;
-                        status = "disabled";
-                        //interrupt 
-                        //clocks 
-                        //clock-frequency 
-                };
-		i2c2:i2c2@00004200{
-                        compatible = "mfr_i2c0";
-                        reg = < 0x00004200 , 0x100 >;
-                        #address-cells = < 1 >;
-                        #size-cells = < 0 >;
-                        status = "disabled";
-			//interrupt 
-                        //clocks 
-			//clock-frequency
-                };
-	};
+    compatible = "mirafra_ramanujan_SOC", "mfr_soc";
+    #address-cells = <1>;   // 32-bit address cells
+    #size-cells = <1>;
+
+    i2c_clock: i2c_clock@3900{
+	    compatible = "i2c_clock";
+	    reg = <0x3900 0x100 >;
+	    status = "disabled";
+	    #clock-cells = <0>;
+	   // #clock-size = <1>;
+    };
+    i2c: i2c{
+		#address-cells = <1>;   // 32-bit address cells
+    		#size-cells = <0>;
+		
+        i2c0: i2c0@40{
+            compatible = "mfr_i2c0";
+            reg = <0x00000040 0x0000010>;  // 4-byte address, 4-byte size
+            status = "disabled";
+            clocks = <&i2c_clock>;
+            clock-frequency = <100000>; // Example clock frequency (100 kHz)
+            #address-cells = <1>;
+            #size-cells = <0>;
+        };
+
+        i2c1: i2c1@68 {
+            compatible = "mfr_i2c0";
+            reg = <0x00000068 0x0000010>;  // 4-byte address, 4-byte size
+            status = "disabled";
+            clocks = <&i2c_clock>;
+            clock-frequency = <100000>; // Example clock frequency
+            #address-cells = <1>;
+            #size-cells = <0>;
+        };
+
+        i2c2: i2c2@4 {
+            compatible = "mfr_i2c0";
+            reg = <0x00000004 0x000000010>;  // 4-byte address, 4-byte size
+            status = "disabled";
+            clocks = <&i2c_clock>;
+            clock-frequency = <100000>; // Example clock frequency
+            #address-cells = <1>;
+            #size-cells = <0>;
+        };
+    };
+
 };
