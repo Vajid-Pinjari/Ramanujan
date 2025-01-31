@@ -1,0 +1,1 @@
+savedcmd_/home/mirafra/GIT/Ramanujan/I2c_driver/ramanujan_i2c.ko := ld -r -m elf_x86_64 -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T scripts/module.lds -o /home/mirafra/GIT/Ramanujan/I2c_driver/ramanujan_i2c.ko /home/mirafra/GIT/Ramanujan/I2c_driver/ramanujan_i2c.o /home/mirafra/GIT/Ramanujan/I2c_driver/ramanujan_i2c.mod.o

@@ -1,0 +1,1 @@
+savedcmd_/home/mirafra/GIT/Ramanujan/I2c_driver/Module.symvers :=  scripts/mod/modpost -M -m -a      -o /home/mirafra/GIT/Ramanujan/I2c_driver/Module.symvers -T /home/mirafra/GIT/Ramanujan/I2c_driver/modules.order -i Module.symvers -e 
