@@ -497,9 +497,16 @@ err_put_exclusive_rate:
     return ret;
 }
 
-static int mfr_i2c_remove(struct platform_device *pdev)
+static void mfr_i2c_remove(struct platform_device *pdev)
 {
-	return 0;
+	
+    struct mfr_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
+
+	clk_rate_exclusive_put(i2c_dev->bus_clk);
+	clk_disable_unprepare(i2c_dev->bus_clk);
+
+	free_irq(i2c_dev->irq, i2c_dev);
+	i2c_del_adapter(&i2c_dev->adapter);
 }
 
 
