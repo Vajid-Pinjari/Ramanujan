@@ -65,10 +65,10 @@
             #size-cells = <0>;
         };
 
-        i2s0: i2s@ff000000 {
+        i2s0: i2s@7008000 {
 		compatible = "Ramanujan,mfr-i2s";
-		reg = < >;
-		interrupts = <1>;
+		reg = <0x07008000 0x1000 >;
+		//interrupts = <1>;
 		//clocks = < >;
 		//clock-names = "i2s_clk", "i2s_hclk";
 		//dmas = <&dmac 11>, <&dmac 12>;
