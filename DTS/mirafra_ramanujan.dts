@@ -1,4 +1,7 @@
 /dts-v1/;
+
+        // Address space shared by I2C of external camera module and control registers of the custom logic inside.
+        i2c3: i2c2@7102FFF{
 /{
     compatible = "mirafra_ramanujan_SOC", "mfr_soc";
     #address-cells = <1>;   // 32-bit address cells
@@ -11,39 +14,67 @@
 	    #clock-cells = <0>;
 	   // #clock-size = <1>;
     };
-    i2c: i2c{
-		#address-cells = <1>;   // 32-bit address cells
-    		#size-cells = <0>;
-		
-        i2c0: i2c0@40{
+    	
+        i2c0: i2c0@3e000000{
             compatible = "mfr_i2c0";
-            reg = <0x00000040 0x0000010>;  // 4-byte address, 4-byte size
-            status = "disabled";
+            reg = <0x3E000000 0x1000>;  // 4-byte address, 4-kb size
+            status = "okay";
             clocks = <&i2c_clock>;
-            clock-frequency = <100000>; // Example clock frequency (100 kHz)
+            clock-frequency = <1000000>; // Example clock frequency (1 MHZ) i.e fast mode plus
+	    interrupts = < 1 >;
+            //interrupt-parent = <&gic>;
             #address-cells = <1>;
             #size-cells = <0>;
         };
 
-        i2c1: i2c1@68 {
+        i2c1: i2c1@7000000{
             compatible = "mfr_i2c0";
-            reg = <0x00000068 0x0000010>;  // 4-byte address, 4-byte size
-            status = "disabled";
+            reg = <0x070000000 0x1000>;  // 4-byte address, 4-kb size
+            status = "okay";
             clocks = <&i2c_clock>;
-            clock-frequency = <100000>; // Example clock frequency
+            clock-frequency = <1000000>; // Example clock frequency (1 MHZ) i.e fast mode plus
+	    interrupts = < 1 >;
+            //interrupt-parent = <&gic>;
             #address-cells = <1>;
             #size-cells = <0>;
         };
 
-        i2c2: i2c2@4 {
+        // Address space shared by I2C of external display and the external FPGA that has the custom logic inside.
+        i2c2: i2c2@7100000{
             compatible = "mfr_i2c0";
-            reg = <0x00000004 0x000000010>;  // 4-byte address, 4-byte size
-            status = "disabled";
+            reg = <0x07100000 0x1000>;  // 4-byte address, 4-kb size
+            status = "okay";
             clocks = <&i2c_clock>;
-            clock-frequency = <100000>; // Example clock frequency
+            clock-frequency = <1000000>; // Example clock frequency (1 MHZ) i.e fast mode plus
+	    interrupts = < 1 >;
+            //interrupt-parent = <&gic>;
             #address-cells = <1>;
             #size-cells = <0>;
         };
-    };
+
+        // Address space shared by I2C of external camera module and control registers of the custom logic inside.
+        i2c3: i2c2@7102FFF{
+            compatible = "mfr_i2c0";
+            reg = <0x07102FFF 0x1000>;  // 4-byte address, 4-kb size
+            status = "okay";
+            clocks = <&i2c_clock>;
+	    clock-frequency = <1000000>; //1mhz
+	    interrupts = < 1 >;
+            //interrupt-parent = <&gic>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+        };
+
+        i2s0: i2s@ff000000 {
+		compatible = "Ramanujan,mfr-i2s";
+		reg = < >;
+		interrupts = <1>;
+		//clocks = < >;
+		//clock-names = "i2s_clk", "i2s_hclk";
+		//dmas = <&dmac 11>, <&dmac 12>;
+		//dma-names = "tx", "rx";
+		//#sound-dai-cells = <0>;
+		//status = "disabled";
+	};
 
 };

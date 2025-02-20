@@ -69,7 +69,8 @@ struct mfr_i2c_dev{
 	size_t msg_buf_remaining;
 };
 
-
+void mfr_fill_txfifo(struct mfr_i2c_dev *);
+void mfr_drain_rxfifo(struct mfr_i2c_dev *);
 #define to_clk_mfr_i2c(_hw)  container_of(_hw , struct clk_mfr_i2c, hw)
 struct clk_mfr_i2c{
     struct clk_hw hw;
@@ -497,7 +498,7 @@ err_put_exclusive_rate:
     return ret;
 }
 
-static void mfr_i2c_remove(struct platform_device *pdev)
+static int mfr_i2c_remove(struct platform_device *pdev)
 {
 	
     struct mfr_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
@@ -507,6 +508,8 @@ static void mfr_i2c_remove(struct platform_device *pdev)
 
 	free_irq(i2c_dev->irq, i2c_dev);
 	i2c_del_adapter(&i2c_dev->adapter);
+
+    return 0;
 }
 
 
