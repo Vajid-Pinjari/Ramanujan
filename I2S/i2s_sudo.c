@@ -12,6 +12,8 @@
 #include <sound/pcm_params.h>
 #include <sound/dmaengine_pcm.h>
 
+#include "i2s_headers.h" 
+
 /* register mapping pending */
 
 #define DRV_NAME "mfr-i2s"
@@ -86,9 +88,81 @@ static const struct snd_soc_component_driver mfr_i2s_component = {
  * used when initializing the hardware.
  */
 static const struct reg_default mfr_i2s_reg_defaults[] = {
-
+    { 0x00, 0x0000000f},
+    { 0x04, 0x0000000f},
+    { 0x08, 0x00071f1f},
+    { 0x10, 0x001f0000},
+   // { 0x14, 0x00000000},
 };
 
+static bool mfr_i2s_writeable_regs(struct device *dev,unsigned int reg)
+{
+    switch(reg)
+    {
+        case I2S_TXCR:
+        case I2S_RXCR:
+        case I2S_CKR:
+        case I2S_DMACR:
+        case I2S_INTCR:
+        case I2S_XFER:
+        case I2S_CLR:
+        case I2S_TXDR:
+            return true;
+        default : 
+            return false;
+    }
+    return true;
+}
+
+
+static bool mfr_i2s_readable_regs(struct device *dev, unsigned int reg)
+{
+	switch (reg) {
+	case I2S_TXCR:
+	case I2S_RXCR:
+	case I2S_CKR:
+	case I2S_DMACR:
+	case I2S_INTCR:
+	case I2S_XFER:
+	case I2S_CLR:
+	case I2S_TXDR:
+	case I2S_RXDR:
+	case I2S_FIFOLR:
+	case I2S_INTSR:
+		return true;
+	default:
+		return false;
+	}
+    return true;
+}
+
+static bool mfr_i2s_volatile_regs(struct device *dev, unsigned int reg)
+{
+    switch(reg)
+    {
+        case I2S_INTSR:
+        case I2S_CLR:
+        case I2S_FIFOLR:
+        case I2S_TXDR:
+        case I2S_RXDR:
+            return true;
+        default:
+            return false;
+    }
+    return true;
+}
+
+static bool mfr_i2s_precious_reg(struct device *dev,unsigned int reg)
+{
+    switch(reg)
+    {
+        case I2S_RXDR:
+            return true;
+        default:
+            return false;
+    }
+    return true;
+}
 /* 
  * Regmap Configuration
  * This defines:
@@ -97,6 +171,16 @@ static const struct reg_default mfr_i2s_reg_defaults[] = {
  * - Read/write access properties 
  */
 static const struct regmap_config mfr_i2s_regmap_config = {
+    .reg_bits = 32,
+    .reg_stride = 4,  //
+    .val_bits = 32,
+    .max_register = I2S_RXDR,
+    .num_reg_defaults = ARRAY_SIZE(mfr_i2s_regs_default),
+    .writeable_regs = mfr_i2s_writeable_regs,
+    .readable_regs =  mfr_i2s_readable_regs,
+    .volatile_regs = mfr_i2s_volatile_regs,
+    .precious_reg = mfr_i2s_precious_reg,
+    //.cache_type = /* */ ,
 
 };
 
@@ -111,8 +195,9 @@ static const struct of_device_id mfr_i2s_match[]
 // Power Management (Optional but Important)
 
 // Probe Function: Initializes the I2S Controller 
-static int probe_platform()
+static int probe_platform(struct platform_device *pdev)
 {
+
 
 }
 
@@ -122,11 +207,27 @@ static void remove_platform()
     
 }
 
+static const struct of_device_id mfr_i2s_match[] __maybe_unused = {
+    { .compatible = "mirafra , mfr-i2s",},
+    {},
+};
+
+MODULE_DEVICE_TABLE(of,mfr_i2s_match);
 
 //Platform Driver Definition
 static struct platform_driver mfr_i2s_driver = {
     .probe = probe_platform,
-    /* .remove should be added for cleanup */
+    .remove = mfr_i2s_remove,
+    .driver = {
+        .name = DRV_NAME,
+        .of_match_table = of_match_ptr(mfr_i2s_match),
+        /* .pm = &mfr_i2s_pm_ops, */
+    },
 };
 
-module_platform_driver();
+module_platform_driver(mfr_i2s_driver);
+
+MODULE_AUTHOR("Ramanujan : MFR I2S DRIVER");
+MODULE_DESCRIPTION("An I2S Controller Driver");
+MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform : " DRV_NAME);
