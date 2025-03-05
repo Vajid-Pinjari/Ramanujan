@@ -88,7 +88,7 @@ static inline u32 mfr_i2c_readl(struct mfr_i2c_dev *i2c_dev, u32 reg)
 }
 
 
-static int clk_mfr_i2c_calc_divider(unsigned long rate,unsigned long parent_rate)
+static int mfr_clk_i2c_calc_divider(unsigned long rate,unsigned long parent_rate)
 {
     //set the divider {approximately = pr/r}
     u32 divider = DIV_ROUND_UP( parent_rate , rate );
@@ -105,11 +105,11 @@ static int clk_mfr_i2c_calc_divider(unsigned long rate,unsigned long parent_rate
 }
 
 
-static int clk_mfr_i2c_set_rate(struct clk_hw *hw, unsigned long rate,unsigned long parent_rate)
+static int mfr_clk_i2c_set_rate(struct clk_hw *hw, unsigned long rate,unsigned long parent_rate)
 {
     struct clk_mfr_i2c *div = to_clk_mfr_i2c(hw);
     unsigned int redl,fedl;
-    unsigned int divider = clk_mfr_i2c_calc_divider(rate,parent_rate);
+    unsigned int divider = mfr_clk_i2c_calc_divider(rate,parent_rate);
     if(divider == -EINVAL)
         return -EINVAL;
 
@@ -126,14 +126,14 @@ static int clk_mfr_i2c_set_rate(struct clk_hw *hw, unsigned long rate,unsigned l
     return 0;
 }
 
-static long clk_mfr_i2c_round_rate(struct clk_hw *hw , unsigned long rate,unsigned long *parent_rate)
+static long mfr_clk__i2c_round_rate(struct clk_hw *hw , unsigned long rate,unsigned long *parent_rate)
 {
-    u32 divider = clk_mfr_i2c_calc_divider(rate,*parent_rate);
+    u32 divider = mfr_clk_i2c_calc_divider(rate,*parent_rate);
 
     return DIV_ROUND_UP(*parent_rate , divider);
 }
 
-static unsigned long clk_mfr_i2c_recalc_rate(struct clk_hw  *hw, unsigned long parent_rate)
+static unsigned long mfr_clk_i2c_recalc_rate(struct clk_hw  *hw, unsigned long parent_rate)
 {
     struct clk_mfr_i2c *div = to_clk_mfr_i2c(hw);
     u32 divider = mfr_i2c_readl( div->i2c_dev , I2C_CLK_DIV_REG );
@@ -141,10 +141,10 @@ static unsigned long clk_mfr_i2c_recalc_rate(struct clk_hw  *hw, unsigned long p
     return DIV_ROUND_UP(parent_rate, divider);
 }
 
-static const struct clk_ops clk_mfr_i2c_ops = {
-    .set_rate =  clk_mfr_i2c_set_rate,
-    .round_rate = clk_mfr_i2c_round_rate,
-    .recalc_rate = clk_mfr_i2c_recalc_rate,
+static const struct clk_ops mfr_clk_i2c_ops = {
+    .set_rate =  mfr_clk_i2c_set_rate,
+    .round_rate = mfr_clk__i2c_round_rate,
+    .recalc_rate = mfr_clk_i2c_recalc_rate,
 };
 
 static struct clk *mfr_i2c_register_div( struct device *dev ,
@@ -162,7 +162,7 @@ snprintf(name,sizeof(name), "%s_div" ,dev_name(dev));
 mclk_name = __clk_get_name(mclk);
 
 // Step 2: Initialize clock settings (operations, name, parent, etc.)
-init.ops = &clk_mfr_i2c_ops;
+init.ops = &mfr_clk_i2c_ops;
 init.name = name;
 init.parent_names = (const char * []){ mclk_name };
 init.num_parents = 1;
