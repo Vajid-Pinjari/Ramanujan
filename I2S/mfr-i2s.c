@@ -59,6 +59,105 @@ struct mfr_i2s_dev{
     
 };
 
+
+static inline struct mfr_i2s_dev *to_info(struct snd_soc_dai *dai)
+{
+	return snd_soc_dai_get_drvdata(dai);
+}
+
+//initialized DMA in dai probe 
+static int mfr_i2s_dai_probe(struct snd_soc_dai *dai)
+{
+    //setting DMA data for playback and capture
+    //1.take dai driver data from platform driver
+    struct mfr_i2s_dev *i2s = snd_soc_dai_get_drvdata(dai);
+    //set DMA Data
+    snd_soc_dai_init_dma_data(dai,i2s->has_playback ? &i2s->playback_dma_data : NULL, 
+                                i2s->has_capture ? &i2s->capture_dma_data : NULL);
+    
+    return 0;
+}
+
+static int mfr_i2s_dai_hw_params(struct snd_pcm_substream *substream ,struct snd_pcm_hw_params *params,struct 
+                                snd_soc_dai *dai)
+{
+    struct mfr_i2s_dev *i2s = to_info(dai);
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	unsigned int val = 0;
+	unsigned int mclk_rate, bclk_rate, div_bclk, div_lrck;
+
+//master mode clock cfg for bit clk and lrclk(ws) 
+	if (i2s->is_master_mode) {
+        //taking mclk_rate from platform drv
+		mclk_rate = clk_get_rate(i2s->mclk);
+		bclk_rate = i2s->bclk_ratio * params_rate(params);
+		if (!bclk_rate)
+			return -EINVAL;
+
+        //divider for bitclock
+		div_bclk = DIV_ROUND_CLOSEST(mclk_rate, bclk_rate);
+        //divider for lrclk
+		div_lrck = bclk_rate / params_rate(params);
+        //update CKR 
+		regmap_update_bits(i2s->regmap, I2S_CKR,
+				   I2S_CKR_MDIV_MASK,
+				   I2S_CKR_MDIV(div_bclk));
+		regmap_update_bits(i2s->regmap, I2S_CKR,
+				   I2S_CKR_TSD_MASK |
+				   I2S_CKR_RSD_MASK,
+				   I2S_CKR_TSD(div_lrck) |
+				   I2S_CKR_RSD(div_lrck));
+	}
+
+    //select i2s format
+    switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S8:
+		val |= I2S_TXCR_VDW(8);
+		break;
+	case SNDRV_PCM_FORMAT_S16_LE:
+		val |= I2S_TXCR_VDW(16);
+		break;
+	case SNDRV_PCM_FORMAT_S20_3LE:
+		val |= I2S_TXCR_VDW(20);
+		break;
+	case SNDRV_PCM_FORMAT_S24_LE:
+		val |= I2S_TXCR_VDW(24);
+		break;
+	case SNDRV_PCM_FORMAT_S32_LE:
+		val |= I2S_TXCR_VDW(32);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+    //select channels for i2s
+    switch (params_channels(params)) {
+	case 8:
+		val |= I2S_CHN_8;
+		break;
+	case 6:
+		val |= I2S_CHN_6;
+		break;
+	case 4:
+		val |= I2S_CHN_4;
+		break;
+	case 2:
+		val |= I2S_CHN_2;
+		break;
+	default:
+		dev_err(i2s->dev, "invalid channel: %d\n",
+			params_channels(params));
+		return -EINVAL;
+	}
+    
+    
+    return 0;
+}
+
+static const struct snd_soc_dai_ops mfr_i2s_dai_ops = {
+    .probe = mfr_i2s_dai_probe,
+    .hw_params = mfr_i2s_dai_hw_params,
+};
 /* 
  * DAI (Digital Audio Interface) Driver Definition 
  * This structure defines:
@@ -66,8 +165,9 @@ struct mfr_i2s_dev{
  * - Operations for configuring the I2S interface (e.g., hw_params, trigger)
  * - Playback & Capture capabilities
  */
-static struct snd_soc_dai_driver rockchip_i2s_dai = {
-	
+static struct snd_soc_dai_driver mfr_i2s_dai = {
+    .ops = mfr_i2s_dai_ops,
+    .symmetric_rate = 1,
 };
 
 /* 
@@ -78,10 +178,11 @@ static struct snd_soc_dai_driver rockchip_i2s_dai = {
  * - DAPM (Dynamic Audio Power Management) support
  * - Codec interactions
  */
-static const struct snd_soc_component_driver mfr_i2s_component = {
-	,
-};
 
+static const struct snd_soc_component_driver  mfr_i2s_cmpt_drv = {
+    .name = DRV_NAME,
+    .legacy_dai_naming = 0, //modern naming convention
+};
 /* 
  * Register Defaults
  * This structure stores default values for registers, 
@@ -94,6 +195,7 @@ static const struct reg_default mfr_i2s_reg_defaults[] = {
     { 0x10, 0x001f0000},
    // { 0x14, 0x00000000},
 };
+
 
 static bool mfr_i2s_writeable_regs(struct device *dev,unsigned int reg)
 {
@@ -227,18 +329,17 @@ static int mfr_i2s_init_dai(struct mfr_i2s_dev *i2s ,struct resource *res,struct
         dai->playback.formats = SNDRV_PCM_FMTBIT_S8	 |
                                 SNDRV_PCM_FMTBIT_S16_LE |
                                 SNDRV_PCM_FMTBIT_S20_3LE |
-                                SNDRV_PCM_FMTBIT_S32_LE |
                                 SNDRV_PCM_FMTBIT_S32_LE;
 
         i2s->playback_dma_data.addr = res->start + I2S_TXDR;
-        i2s->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-        i2s->playback_dma_data.maxburst = 8;
+        i2s->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES; //same as for our SOC
+        i2s->playback_dma_data.maxburst = 8;  //at a time how many words can read or write
     }
 
     //prepare RX DMA for capture
     if(i2s->has_capture)
     {
-         dai->capture.stream_name = "Capture";
+        dai->capture.stream_name = "Capture";
         dai->capture.channels_min = 1;
         dai->capture.channels_max = 2;
         dai->capture.rates = SNDRV_PCM_RATE_8000_192000;
@@ -327,19 +428,37 @@ if (IS_ERR(i2s_dev->regmap)) {
 
 i2s_dev->dev = &pdev->dev;
 
+//select i2s as master mode
+i2s_dev->is_master_mode = true;
+
 //set private data structure with platform device structure
 platform_set_drvdata(pdev,i2s_dev);
 
 //initialize dai driver setup
 ret = mfr_i2s_init_dai(i2s_dev,res,&dai);
-
 if(ret)
 {
     goto err_clk;
 }
 
+//register component driver/DAI hardware (to inform ALSA)
+ret = devm_snd_soc_register_component(&pdev->dev,&mfr_i2s_cmpt_drv,&dai,0);
+if(ret)
+{
+    dev_err(&pdev->dev, "Could not register DAI \n");
+		goto err_suspend;
+}
 
+//register pcm for default dma for user level app
+ret = devm_snd_dmaengine_pcm_register(&pdev->dev,NULL,0);
+if(ret)
+{
+    dev_err(&pdev->dev, "Could not register PCM\n");
+    goto err_suspend;
+}
 
+err_suspend:
+   // i2s_runtime_suspend(&pdev->dev);
 err_clk:
     clk_disable_unprepare(i2s_dev->bus_clk);
     clk_disable_unprepare(i2s_dev->mclk);
@@ -375,3 +494,12 @@ MODULE_AUTHOR("Ramanujan : MFR I2S DRIVER");
 MODULE_DESCRIPTION("An I2S Controller Driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform : " DRV_NAME);
+
+/* How to Enable Full Duplex Mode?
+
+To enable full-duplex mode in an ALSA ASoC driver:
+✔ Ensure separate TX and RX DMA channels are available.
+✔ Do NOT set SND_DMAENGINE_PCM_FLAG_HALF_DUPLEX, as this enforces half-duplex operation.
+✔ In the trigger() function, enable both TX and RX DMA transfers simultaneously.
+✔ Set appropriate audio format & clocking in set_fmt().
+*/
