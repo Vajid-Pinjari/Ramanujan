@@ -254,15 +254,16 @@ static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
     struct mfr_i2c_dev *i2c_dev = data;
     u32 val , err;
     
+    //reading status register
     val = mfr_i2c_readl(i2c_dev,I2C_STATUS_REG);
-
+    //checking error msg from status register
     err = val & (I2C_S_CLKT | I2C_S_ERR);
     if(err)
     {
         i2c_dev->msg_err = err;
         goto complete;
     }
-
+    //checking if the transfer is done or not
     if(val & I2C_S_DONE )
     {
         if(!i2c_dev->curr_msg)
@@ -275,7 +276,8 @@ static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
             val = mfr_i2c_readl(i2c_dev, I2C_STATUS_REG);
         }
 
-        if((val & I2C_S_RXD) || i2c_dev->msg_buf_remaining)
+        //checing if contain data or any remaining msg
+        if((val & I2C_S_RXD) || i2c_dev->msg_buf_remaining)  
             i2c_dev->msg_err = I2C_S_LEN;
         else 
             i2c_dev->msg_err =0 ;
@@ -283,6 +285,7 @@ static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
         goto complete;
     }
 
+    //if write flag sets i.e FIFO needs writing
     if(val & I2C_S_TXW){
         if(!i2c_dev->msg_buf_remaining){
             i2c_dev->msg_err = val | I2C_S_LEN;
@@ -299,7 +302,7 @@ static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
 
         return IRQ_HANDLED;
     }
-
+    //FIFO needs reading
     if(val & I2C_S_RXR )
     {
         if(!i2c_dev->msg_buf_remaining)
@@ -465,7 +468,7 @@ static int mfr_i2c_probe(struct platform_device *pdev)
     // Step 13: Set adapter metadata (name, owner, algorithm, parent, etc.)
     i2c_set_adapdata(adap,i2c_dev);
     adap->owner = THIS_MODULE;
-    adap->class = I2C_CLASS_DEPRECATED;
+    adap->class = I2C_CLASS_HWMON; //(H/w monitoring devices) //I2C_CLASS_DEPRECATED; for no class
     snprintf(adap->name, sizeof(adap->name), "mfr (%s)", of_node_full_name(pdev->dev.of_node));
     adap->algo = &mfr_i2c_algo;
     adap->dev.parent = &pdev->dev;
