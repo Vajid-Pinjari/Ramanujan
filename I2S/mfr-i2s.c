@@ -40,7 +40,7 @@ struct mfr_i2s_dev{
     struct snd_dmaengine_dai_dma_data playback_dma_data;
 
     struct regmap *regmap;
-    struct regmap *grf;
+    //struct regmap *grf;
 
     bool has_capture;
     bool has_playback;
@@ -144,19 +144,158 @@ static int mfr_i2s_dai_hw_params(struct snd_pcm_substream *substream ,struct snd
 	case 2:
 		val |= I2S_CHN_2;
 		break;
+
 	default:
 		dev_err(i2s->dev, "invalid channel: %d\n",
 			params_channels(params));
 		return -EINVAL;
 	}
-    
-    
+
+    //configure register for full duplex mode
+    //Update RXCR register for capture
+    regmap_update_bits(i2s->regmap, I2S_RXCR,I2S_RXCR_VDW_MASK | I2S_RXCR_CSR_MASK,val);
+    //Update TXCR register for playback
+    regmap_update_bits(i2s->regmap, I2S_TXCR,I2S_TXCR_VDW_MASK | I2S_TXCR_CSR_MASK,val); 
+
+
+	// **REMOVED GRF CONFIGURATION HERE**
+	// No need to update GRF for I²S direction control.
+
+    //masking & updating TDL & RDL at 16 for TX & RX
+    //(i.e at a time at least 16 words filled before start transfer)
+    //(i.e at least 16 words needed to fetch data)
+    regmap_update_bits(i2s->regmap,I2S_DMACR,I2S_DMACR_TDL_MASK|I2S_DMACR_RDL_MASK ,I2S_DMACR_TDL(16)|I2S_DMACR_RDL(16));
+
+        
+	/* Force Full Duplex Mode (TX + RX Always Enabled) */
+	regmap_update_bits(i2s->regmap, I2S_CKR, I2S_CKR_TRCM_MASK, I2S_CKR_TRCM_TXRX);
+
     return 0;
 }
+
+int mfr_i2s_dai_dai_bclk_ratio(struct snd_soc_dai *dai ,unsigned int ratio)
+{
+    mfr_i2s_dev *i2s = to_info(dai);
+    //setting explicitly from user space
+    //i.e override the setting which done in hw_params.
+    i2s->bclk_ratio = ratio;
+
+    return 0;
+}
+
+/*  
+    why required set_clk?
+    Your I2S controller or codec requires explicit configuration of the MCLK frequency.
+    The driver structure requires informing the system about the MCLK source, even if it is fixed.
+    Your audio codec needs MCLK frequency information for proper configuration.
+*/
+int mfr_i2s_set_sysclk(struct snd_soc_dai *dai,int clk_id,unsigned int freq,int dir)
+{
+    int ret;
+    struct mfr_i2s_dev *i2s = to_info(dai);
+
+    if(freq==0)
+    return 0;
+    //set clk rate of given freq from app layer
+    ret = clk_set_rate(i2s->mclk,freq);
+    if (ret)
+		dev_err(i2s->dev, "Fail to set mclk %d\n", ret);
+
+	return ret;
+}
+
+int mfr_i2s_set_fmt(struct snd_soc_dai *dai, int fmt)
+{
+    struct mfr_i2s_dev *i2s = to_info(dai);
+    int val=0,mask=0;
+    int ret =0;
+
+    mask = I2S_CKR_MSS_MASK;
+    //check clk provided by
+    switch(fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK)
+    {
+        case SND_SOC_DAIFMT_BC_FC:   //bit clk generated & frame clk generated
+		/* Set source clock in Master mode */
+		val = I2S_CKR_MSS_MASTER;
+		i2s->is_master_mode = true;
+		break;
+	case SND_SOC_DAIFMT_BP_FP:  ////bit clk provided & frame clk provided
+		val = I2S_CKR_MSS_SLAVE;
+		i2s->is_master_mode = false;
+		break;
+	default:
+		ret = -EINVAL;
+        goto end;
+    } 
+    //update CKR register
+    regmap_update_bits(i2s->regmap, I2S_CKR, mask, val);
+
+    //set clock polarity
+    //mask for clock polarity
+    mask = I2S_CKR_CKP_MASK | I2S_CKR_TLP_MASK | I2S_CKR_RLP_MASK;
+    switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
+	case SND_SOC_DAIFMT_NB_NF:           //bitclk- Normal Frameclk-Normal
+		val = I2S_CKR_CKP_NORMAL |       
+		      I2S_CKR_TLP_NORMAL |
+		      I2S_CKR_RLP_NORMAL;
+		break;
+	case SND_SOC_DAIFMT_NB_IF:           //bitclk- Normal Frameclk-Inverted
+		val = I2S_CKR_CKP_NORMAL |
+		      I2S_CKR_TLP_INVERTED |
+		      I2S_CKR_RLP_INVERTED;
+		break;
+	case SND_SOC_DAIFMT_IB_NF:             //bitclk- Inverted Frameclk-Normal
+		val = I2S_CKR_CKP_INVERTED |
+		      I2S_CKR_TLP_NORMAL |
+		      I2S_CKR_RLP_NORMAL;
+		break;
+	case SND_SOC_DAIFMT_IB_IF:             //bitclk- Inverted Frameclk-Inverted
+		val = I2S_CKR_CKP_INVERTED |
+		      I2S_CKR_TLP_INVERTED |
+		      I2S_CKR_RLP_INVERTED;
+		break;
+	default:
+		ret = -EINVAL;
+		goto end;
+	}
+    regmap_update_bits(i2s->regmap,I2S_CKR,mask,val);
+
+    //mode of data transfer
+    mask = I2S_RXCR_IBM_MASK | I2S_RXCR_TFS_MASK | I2S_RXCR_PBM_MASK;
+	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
+	case SND_SOC_DAIFMT_RIGHT_J:             //right justified data format
+		val = I2S_RXCR_IBM_RSJM;
+		break;
+	case SND_SOC_DAIFMT_LEFT_J:              //left justified data format
+		val = I2S_RXCR_IBM_LSJM;
+		break;
+	case SND_SOC_DAIFMT_I2S:                //I2S normal data format
+		val = I2S_RXCR_IBM_NORMAL;
+		break;
+	case SND_SOC_DAIFMT_DSP_A:              /* PCM delay 1 bit mode */
+		val = I2S_RXCR_TFS_PCM | I2S_RXCR_PBM_MODE(1);
+		break;
+	case SND_SOC_DAIFMT_DSP_B:              /* PCM no delay mode */
+		val = I2S_RXCR_TFS_PCM;
+		break;
+	default:
+		ret = -EINVAL;
+		goto end;
+	}
+
+    regmap_update_bits(i2s->regmap,I2S_CKR,mask,val);
+end:
+    return ret;
+}
+
 
 static const struct snd_soc_dai_ops mfr_i2s_dai_ops = {
     .probe = mfr_i2s_dai_probe,
     .hw_params = mfr_i2s_dai_hw_params,
+    .set_bclk_ratio = mfr_i2s_dai_bclk_ratio,
+    .set_sysclk = mfr_i2s_set_sysclk,
+    .set_fmt = mfr_i2s_set_fmt,
+    //.trigger = mfr_i2s_trigger,
 };
 /* 
  * DAI (Digital Audio Interface) Driver Definition 
