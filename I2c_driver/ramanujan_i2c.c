@@ -55,7 +55,7 @@
 #define I2C_CDIV_MAX	0xFFFE
 
 
-struct mfr_i2c_dev{
+struct rjn_i2c_dev{
 	struct device *dev;
 	void __iomem *regs;
 	int irq;
@@ -69,26 +69,32 @@ struct mfr_i2c_dev{
 	size_t msg_buf_remaining;
 };
 
-void mfr_fill_txfifo(struct mfr_i2c_dev *);
-void mfr_drain_rxfifo(struct mfr_i2c_dev *);
-#define to_clk_mfr_i2c(_hw)  container_of(_hw , struct clk_mfr_i2c, hw)
-struct clk_mfr_i2c{
+
+void rjn_fill_txfifo(struct mfr_i2c_dev *);
+void rjn_drain_rxfifo(struct mfr_i2c_dev *);
+
+//container of for clk structure
+#define to_clk_rjn_i2c(_hw)  container_of(_hw , struct clk_rjn_i2c, hw)
+struct clk_rjn_i2c{
     struct clk_hw hw;
-    struct mfr_i2c_dev *i2c_dev;
+    struct rjn_i2c_dev *i2c_dev;
 };
 
-static inline void mfr_i2c_writel(struct mfr_i2c_dev *i2c_dev, u32 reg , u32 val)
+
+//writel abstraction function to write data into reg directly
+static inline void rjn_i2c_writel(struct rjn_i2c_dev *i2c_dev, u32 reg , u32 val)
 {
     writel(val,i2c_dev->regs + reg);
 }
 
-static inline u32 mfr_i2c_readl(struct mfr_i2c_dev *i2c_dev, u32 reg)
+//readl abstraction function to read data into reg directly
+static inline u32 rjn_i2c_readl(struct rjn_i2c_dev *i2c_dev, u32 reg)
 {
 	return readl(i2c_dev->regs + reg);
 }
 
 
-static int mfr_clk_i2c_calc_divider(unsigned long rate,unsigned long parent_rate)
+static int rjn_clk_i2c_calc_divider(unsigned long rate,unsigned long parent_rate)
 {
     //set the divider {approximately = pr/r}
     u32 divider = DIV_ROUND_UP( parent_rate , rate );
@@ -105,54 +111,52 @@ static int mfr_clk_i2c_calc_divider(unsigned long rate,unsigned long parent_rate
 }
 
 
-static int mfr_clk_i2c_set_rate(struct clk_hw *hw, unsigned long rate,unsigned long parent_rate)
+static int rjn_clk_i2c_set_rate(struct clk_hw *hw, unsigned long rate,unsigned long parent_rate)
 {
-    struct clk_mfr_i2c *div = to_clk_mfr_i2c(hw);
+    struct clk_rjn_i2c *div = to_clk_rjn_i2c(hw);
     unsigned int redl,fedl;
-    unsigned int divider = mfr_clk_i2c_calc_divider(rate,parent_rate);
+    unsigned int divider = rjn_clk_i2c_calc_divider(rate,parent_rate);
     if(divider == -EINVAL)
         return -EINVAL;
 
-    mfr_i2c_writel(div->i2c_dev, I2C_CLK_DIV_REG, divider);
+    rjn_i2c_writel(div->i2c_dev, I2C_CLK_DIV_REG, divider);
 
     //scaling factor after transition of falling edge
     fedl = max( divider/16 ,1u );  
     //scaling factor after transition of rising edge
     redl = max(divider/4 ,1u);
 
-    mfr_i2c_writel(div->i2c_dev , I2C_DATA_DELAY_REG , (fedl<<I2C_FEDL_SHIFT) | (redl<<I2C_REDL_SHIFT));
-    
-
+    rjn_i2c_writel(div->i2c_dev , I2C_DATA_DELAY_REG , (fedl<<I2C_FEDL_SHIFT) | (redl<<I2C_REDL_SHIFT)); 
     return 0;
 }
 
-static long mfr_clk__i2c_round_rate(struct clk_hw *hw , unsigned long rate,unsigned long *parent_rate)
+static long rjn_clk__i2c_round_rate(struct clk_hw *hw , unsigned long rate,unsigned long *parent_rate)
 {
-    u32 divider = mfr_clk_i2c_calc_divider(rate,*parent_rate);
+    u32 divider = rjn_clk_i2c_calc_divider(rate,*parent_rate);
 
     return DIV_ROUND_UP(*parent_rate , divider);
 }
 
-static unsigned long mfr_clk_i2c_recalc_rate(struct clk_hw  *hw, unsigned long parent_rate)
+static unsigned long rjn_clk_i2c_recalc_rate(struct clk_hw  *hw, unsigned long parent_rate)
 {
-    struct clk_mfr_i2c *div = to_clk_mfr_i2c(hw);
-    u32 divider = mfr_i2c_readl( div->i2c_dev , I2C_CLK_DIV_REG );
+    struct clk_rjn_i2c *div = to_clk_rjn_i2c(hw);
+    u32 divider = rjn_i2c_readl( div->i2c_dev , I2C_CLK_DIV_REG );
 
     return DIV_ROUND_UP(parent_rate, divider);
 }
 
-static const struct clk_ops mfr_clk_i2c_ops = {
-    .set_rate =  mfr_clk_i2c_set_rate,
-    .round_rate = mfr_clk__i2c_round_rate,
-    .recalc_rate = mfr_clk_i2c_recalc_rate,
+static const struct clk_ops rjn_clk_i2c_ops = {
+    .set_rate =  rjn_clk_i2c_set_rate,
+    .round_rate = rjn_clk__i2c_round_rate,
+    .recalc_rate = rjn_clk_i2c_recalc_rate,
 };
 
-static struct clk *mfr_i2c_register_div( struct device *dev ,
+static struct clk *rjn_i2c_register_div( struct device *dev ,
                                         struct clk *mclk ,
-                                        struct mfr_i2c_dev *i2c_dev)
+                                        struct rjn_i2c_dev *i2c_dev)
 {
     struct clk_init_data init;
-    struct clk_mfr_i2c *prev;
+    struct clk_rjn_i2c *prev;
     char name[32];
     const char *mclk_name;
 
@@ -162,14 +166,14 @@ snprintf(name,sizeof(name), "%s_div" ,dev_name(dev));
 mclk_name = __clk_get_name(mclk);
 
 // Step 2: Initialize clock settings (operations, name, parent, etc.)
-init.ops = &mfr_clk_i2c_ops;
+init.ops = &rjn_clk_i2c_ops;
 init.name = name;
 init.parent_names = (const char * []){ mclk_name };
 init.num_parents = 1;
 init.flags = 0;
 
 // Step 3: Allocate memory for private data structure
-prev = devm_kzalloc(dev, sizeof(struct clk_mfr_i2c),GFP_KERNEL);
+prev = devm_kzalloc(dev, sizeof(struct clk_rjn_i2c),GFP_KERNEL);
 if(prev == NULL )
     return ERR_PTR(-ENOMEM);
 
@@ -184,35 +188,35 @@ clk_hw_register_clkdev(&prev->hw , "div",dev_name(dev));
     return devm_clk_register(dev, &prev->hw);
 }
 
-void mfr_drain_rxfifo(struct mfr_i2c_dev *i2c_dev)
+void rjn_drain_rxfifo(struct rjn_i2c_dev *i2c_dev)
 {
     u32 val;
     while(i2c_dev->msg_buf_remaining)
     {
-        val = mfr_i2c_readl(i2c_dev, I2C_STATUS_REG);
+        val = rjn_i2c_readl(i2c_dev, I2C_STATUS_REG);
         if(!(val & I2C_S_RXD))
         break;
-        *i2c_dev->msg_buf = mfr_i2c_readl(i2c_dev,I2C_DATA_FIFO_REG);
+        *i2c_dev->msg_buf = rjn_i2c_readl(i2c_dev,I2C_DATA_FIFO_REG);
         i2c_dev->msg_buf++;
         i2c_dev->msg_buf_remaining--;
     }
 }
 
-void mfr_fill_txfifo(struct mfr_i2c_dev *i2c_dev)
+void rjn_fill_txfifo(struct rjn_i2c_dev *i2c_dev)
 {
     u32 val;
     while(i2c_dev->msg_buf_remaining)
     {
-        val = mfr_i2c_readl(i2c_dev, I2C_STATUS_REG);
+        val = rjn_i2c_readl(i2c_dev, I2C_STATUS_REG);
         if(!(val & I2C_S_TXD))
             break;
-        mfr_i2c_writel(i2c_dev , I2C_DATA_FIFO_REG, *i2c_dev->msg_buf);
+        rjn_i2c_writel(i2c_dev , I2C_DATA_FIFO_REG, *i2c_dev->msg_buf);
         i2c_dev->msg_buf++;
         i2c_dev->msg_buf_remaining--;
     }
 }
 
-static void mfr_i2c_start_transfer(struct mfr_i2c_dev * i2c_dev)
+static void rjn_i2c_start_transfer(struct rjn_i2c_dev * i2c_dev)
 {
     u32 c = I2C_C_ST |  I2C_C_EN;
     struct i2c_msg *msg = i2c_dev->curr_msg;
@@ -232,15 +236,15 @@ static void mfr_i2c_start_transfer(struct mfr_i2c_dev * i2c_dev)
     if(last_msg)
     c |= I2C_C_INTD;
 
-    mfr_i2c_writel(i2c_dev, I2C_SLAVE_ADDR_REG, msg->addr);
-    mfr_i2c_writel(i2c_dev , I2C_DLEN_REG , msg->len);
-    mfr_i2c_writel(i2c_dev, I2C_CONTROL_REG, c);
+    rjn_i2c_writel(i2c_dev, I2C_SLAVE_ADDR_REG, msg->addr);
+    rjn_i2c_writel(i2c_dev , I2C_DLEN_REG , msg->len);
+    rjn_i2c_writel(i2c_dev, I2C_CONTROL_REG, c);
 
 }
 
 
 
-static void mfr_i2c_finish_transfer(struct mfr_i2c_dev *i2c_dev)
+static void rjn_i2c_finish_transfer(struct rjn_i2c_dev *i2c_dev)
 {
 	i2c_dev->curr_msg = NULL;
 	i2c_dev->num_msgs = 0;
@@ -249,13 +253,13 @@ static void mfr_i2c_finish_transfer(struct mfr_i2c_dev *i2c_dev)
 	i2c_dev->msg_buf_remaining = 0;
 }
 
-static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
+static irqreturn_t rjn_i2c_isr(int this_irq, void *data)
 { 
-    struct mfr_i2c_dev *i2c_dev = data;
+    struct rjn_i2c_dev *i2c_dev = data;
     u32 val , err;
     
     //reading status register
-    val = mfr_i2c_readl(i2c_dev,I2C_STATUS_REG);
+    val = rjn_i2c_readl(i2c_dev,I2C_STATUS_REG);
     //checking error msg from status register
     err = val & (I2C_S_CLKT | I2C_S_ERR);
     if(err)
@@ -272,8 +276,8 @@ static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
         }
         else if(i2c_dev->curr_msg->flags & I2C_M_RD )
         {
-            mfr_drain_rxfifo(i2c_dev);
-            val = mfr_i2c_readl(i2c_dev, I2C_STATUS_REG);
+            rjn_drain_rxfifo(i2c_dev);
+            val = rjn_i2c_readl(i2c_dev, I2C_STATUS_REG);
         }
 
         //checing if contain data or any remaining msg
@@ -292,12 +296,12 @@ static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
             goto complete;
         }
 
-        mfr_fill_txfifo(i2c_dev);
+        rjn_fill_txfifo(i2c_dev);
 
         if(i2c_dev->num_msgs && !i2c_dev->msg_buf_remaining)
         {
             i2c_dev->curr_msg++;
-            mfr_i2c_start_transfer(i2c_dev);
+            rjn_i2c_start_transfer(i2c_dev);
         }
 
         return IRQ_HANDLED;
@@ -310,22 +314,22 @@ static irqreturn_t mfr_i2c_isr(int this_irq, void *data)
             i2c_dev->msg_err = val | I2C_S_LEN ;
             goto complete;
         }
-        mfr_drain_rxfifo(i2c_dev);
+        rjn_drain_rxfifo(i2c_dev);
         return IRQ_HANDLED;
     }
     return IRQ_NONE;
 
-complete : mfr_i2c_writel(i2c_dev, I2C_CONTROL_REG,I2C_C_CLEAR);
-           mfr_i2c_writel(i2c_dev, I2C_STATUS_REG, I2C_S_CLKT |
+complete : rjn_i2c_writel(i2c_dev, I2C_CONTROL_REG,I2C_C_CLEAR);
+           rjn_i2c_writel(i2c_dev, I2C_STATUS_REG, I2C_S_CLKT |
            I2C_S_ERR | I2C_S_DONE);
            complete(&i2c_dev->completion);
 
            return IRQ_HANDLED;
 }
 
-static int mfr_i2c_xfer(struct i2c_adapter *adap , struct i2c_msg msgs[],int num)
+static int rjn_i2c_xfer(struct i2c_adapter *adap , struct i2c_msg msgs[],int num)
 {
-    struct mfr_i2c_dev *i2c_dev = i2c_get_adapdata(adap);
+    struct rjn_i2c_dev *i2c_dev = i2c_get_adapdata(adap);
     unsigned long time_left;
     int i;
 
@@ -347,18 +351,18 @@ static int mfr_i2c_xfer(struct i2c_adapter *adap , struct i2c_msg msgs[],int num
     reinit_completion(&i2c_dev->completion);  // Reinitialize the completion structure
 
 	/* Step 3: Start the I2C transfer */
-    mfr_i2c_start_transfer(i2c_dev);
+    rjn_i2c_start_transfer(i2c_dev);
 
     /* Step 4: Wait for transfer completion with timeout */
     time_left = wait_for_completion_timeout(&i2c_dev->completion,adap->timeout);
     
     /*Step 5: Finish transfer*/
-    mfr_i2c_finish_transfer(i2c_dev);
+    rjn_i2c_finish_transfer(i2c_dev);
 
     /* Step 6: Check if transfer timed out */
     if(!time_left)
     {
-        mfr_i2c_writel(i2c_dev ,I2C_CONTROL_REG, I2C_C_CLEAR);
+        rjn_i2c_writel(i2c_dev ,I2C_CONTROL_REG, I2C_C_CLEAR);
         return -ETIMEDOUT;
     }
 
@@ -375,24 +379,24 @@ static int mfr_i2c_xfer(struct i2c_adapter *adap , struct i2c_msg msgs[],int num
     return -EIO;
 }
 
-static u32 mfr_i2c_func(struct i2c_adapter *adap)
+static u32 rjn_i2c_func(struct i2c_adapter *adap)
 {
     return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
 
-static const struct i2c_algorithm mfr_i2c_algo = {
-    .master_xfer = mfr_i2c_xfer,
-    .functionality = mfr_i2c_func,
+static const struct i2c_algorithm rjn_i2c_algo = {
+    .master_xfer = rjn_i2c_xfer,
+    .functionality = rjn_i2c_func,
 };
 
-static const struct i2c_adapter_quirks mfr_i2c_quirks = {
+static const struct i2c_adapter_quirks rjn_i2c_quirks = {
     .flags = I2C_AQ_NO_CLK_STRETCH,
 };
 
 
-static int mfr_i2c_probe(struct platform_device *pdev)
+static int rjn_i2c_probe(struct platform_device *pdev)
 {
-    struct mfr_i2c_dev *i2c_dev;
+    struct rjn_i2c_dev *i2c_dev;
     int ret;
     struct i2c_adapter *adap;
     struct clk *mclk;
@@ -421,7 +425,7 @@ static int mfr_i2c_probe(struct platform_device *pdev)
         return dev_err_probe(&pdev->dev,PTR_ERR(mclk),"Could not get clock\n");
 
     // Step 6: Register and configure the bus clock divider
-	i2c_dev->bus_clk = mfr_i2c_register_div(&pdev->dev, mclk ,i2c_dev);
+	i2c_dev->bus_clk = rjn_i2c_register_div(&pdev->dev, mclk ,i2c_dev);
     if (IS_ERR(i2c_dev->bus_clk))
 		return dev_err_probe(&pdev->dev, PTR_ERR(i2c_dev->bus_clk),
 				     "Could not register clock\n");
@@ -456,7 +460,7 @@ static int mfr_i2c_probe(struct platform_device *pdev)
     }
 	
     // Step 11: Request an IRQ and set the ISR for handling interrupts
-    ret = request_irq(i2c_dev->irq, mfr_i2c_isr, IRQF_SHARED, dev_name(&pdev->dev), i2c_dev);
+    ret = request_irq(i2c_dev->irq, rjn_i2c_isr, IRQF_SHARED, dev_name(&pdev->dev), i2c_dev);
     if(ret)
     {
         dev_err(&pdev->dev, "Could not request IRQ\n");
@@ -470,7 +474,7 @@ static int mfr_i2c_probe(struct platform_device *pdev)
     adap->owner = THIS_MODULE;
     adap->class = I2C_CLASS_HWMON; //(H/w monitoring devices) //I2C_CLASS_DEPRECATED; for no class
     snprintf(adap->name, sizeof(adap->name), "mfr (%s)", of_node_full_name(pdev->dev.of_node));
-    adap->algo = &mfr_i2c_algo;
+    adap->algo = &rjn_i2c_algo;
     adap->dev.parent = &pdev->dev;
 
     // Step 14: Register the adapter with the I2C subsystem
@@ -478,9 +482,9 @@ static int mfr_i2c_probe(struct platform_device *pdev)
     adap->quirks = of_device_get_match_data(&pdev->dev);	
     
     // Step 15: Configure hardware registers (disable clock stretching timeout)
-    mfr_i2c_writel(i2c_dev , I2C_CLK_STRETCH, 0);
+    rjn_i2c_writel(i2c_dev , I2C_CLK_STRETCH, 0);
     // Step 16: Write default configurations to hardware registers
-    mfr_i2c_writel(i2c_dev , I2C_CONTROL_REG,0);
+    rjn_i2c_writel(i2c_dev , I2C_CONTROL_REG,0);
 
     // Step 17: Add the adapter to the I2C framework
     ret = i2c_add_adapter(adap);
@@ -501,10 +505,10 @@ err_put_exclusive_rate:
     return ret;
 }
 
-static int mfr_i2c_remove(struct platform_device *pdev)
+static void rjn_i2c_remove(struct platform_device *pdev)
 {
 	
-    struct mfr_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
+    struct rjn_i2c_dev *i2c_dev = platform_get_drvdata(pdev);
 
 	clk_rate_exclusive_put(i2c_dev->bus_clk);
 	clk_disable_unprepare(i2c_dev->bus_clk);
@@ -512,27 +516,28 @@ static int mfr_i2c_remove(struct platform_device *pdev)
 	free_irq(i2c_dev->irq, i2c_dev);
 	i2c_del_adapter(&i2c_dev->adapter);
 
-    return 0;
+    //return 0;
 }
 
 
-static const struct of_device_id mfr_i2c_of_match[]={
+static const struct of_device_id rjn_i2c_of_match[]={
 	{ 
-		.name = "mfr_i2c",
+		.name = "ramanujan-i2c",
 		.type = "i2c",
-		.compatible = "mfr_i2c0",
+		.compatible = "rjn_i2c",
 	},
-	{ .compatible = "mfr_i2c1" , .data = &mfr_i2c_quirks },
+	{ .compatible = "rjn_i2c1" , .data = &rjn_i2c_quirks },
 	{},
 };
-MODULE_DEVICE_TABLE(of, mfr_i2c_of_match);
+
+MODULE_DEVICE_TABLE(of, rjn_i2c_of_match);
 
 static struct platform_driver i2c_platform_driver = {
-.probe = mfr_i2c_probe,
-.remove = mfr_i2c_remove,
+.probe = rjn_i2c_probe,
+.remove = rjn_i2c_remove,
 .driver = {
-	.name = "mfr_i2c",
-	.of_match_table = mfr_i2c_of_match,
+	.name = "rjn_i2c",
+	.of_match_table = rjn_i2c_of_match,
 },
 };
 
