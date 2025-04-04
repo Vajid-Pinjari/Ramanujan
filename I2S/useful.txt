@@ -1,0 +1,50 @@
+snd_pcm_readi();
+snd_pcm_writei();
+
+******************************************
+SFR CONFIGURATION
+*****************************************
+TX_CONFIG
+
+1.Transmitter Enable -> 1
+2.transmit channel -> (1<<1)
+3.channel width -> (31<<6)
+4.data width -> (31<<12)
+5.transmit clock mode -> (0<<26)
+6.clock polarity->
+
+********************************************
+RX_CONFIG
+
+1.Receiver enable ->(1<<0)
+2.receive channel->(1<<1)
+3.channel width -> (31<<6)
+4.data width -> (31<<12)
+5.clock mode -> (0<<26)(MASTER)
+6.clock polarity->
+
+*****************************************
+TX_PRESCALAR
+
+1.Master clock divider -> (0<<1) (12.288 MHZ)
+2.transmit clock divider -> (4<<16)
+
+*****************************************
+RX_PRESCALAR
+1.Master clock divider -> (0<<1) (12.288 MHz)
+2.receiver clock divider -> (4<<16)
+
+******************************************
+IRQ_ENABLE
+1111111111
+(0x3FF) Enable all irq's
+
+********************************************
+IRQ_STATUS
+********************************************
+FIFO_FLUFH
+flush txd (0 bit)
+flush rxd (1st bit)
+*******************************************
+FIFO threshold
+

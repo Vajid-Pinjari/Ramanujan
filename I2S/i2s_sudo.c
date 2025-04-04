@@ -172,7 +172,7 @@ static bool mfr_i2s_precious_reg(struct device *dev,unsigned int reg)
  * - Valid address range
  * - Read/write access properties 
  */
-static const struct regmap_config mfr_i2s_regmap_config = {
+static const struct regmap_config rjn_i2s_regmap_config = {
     .reg_bits = 32,
     .reg_stride = 4,  //
     .val_bits = 32,
