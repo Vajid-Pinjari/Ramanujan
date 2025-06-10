@@ -8,180 +8,219 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/types.h>
 #include <linux/stddef.h>  
-//#include <linux/pm_runtime.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/spinlock.h>
 #include <sound/pcm_params.h>
 #include <sound/dmaengine_pcm.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/list.h>
+#include <sound/asoc.h>
 
+/*I2S core register data from SmartDV Datasheet*/
 #include "i2s_headers.h" 
 
-/* register mapping pending */
+/*function prototypes*/
+static int rjn_i2s_dai_hw_params(struct snd_pcm_substream *substream,
+                          struct snd_pcm_hw_params *params,
+                          struct snd_soc_dai *dai);
+
+static int rjn_i2s_dai_bclk_ratio(struct snd_soc_dai *dai, unsigned int ratio);
+
+static int rjn_i2s_set_sysclk(struct snd_soc_dai *dai, int clk_id,
+                       unsigned int freq, int dir);
+
+static int rjn_i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt);
+
+static int rjn_i2s_trigger(struct snd_pcm_substream *substream, int cmd,
+                    struct snd_soc_dai *dai);
 
 #define DRV_NAME "rjn-i2s"
-/* 
- * Private Data Structure for I2S Controller
- * This structure holds device-specific information such as:
- * - Register base address
- * - Clock handles
- * - DMA configurations (if applicable)
- * - IRQ details
- * - Synchronization mechanisms
- */
-
+/* Private Data Structure for I2S Controller*/
 struct rjn_i2s_dev{
     struct device *dev;
-    struct clk *bus_clk;
     struct clk *mclk;
-
-    struct snd_dmaengine_dai_dma_data capture_dma_data;
-    struct snd_dmaengine_dai_dma_data playback_dma_data;
-
     struct regmap *regmap;
-    //struct regmap *grf;
-
     void __iomem *regs;
-    
-    bool has_capture;
-    bool has_playback;
 
     bool tx_start;
     bool rx_start;
+
+    __u32 *tx_buf;
+    size_t tx_len;
+    size_t tx_pos;
+
+    __u32 *rx_buf;
+    size_t rx_len;
+    size_t rx_pos;
+
+    int irq; // IRQ number from DTS or platform
+
+    spinlock_t lock; // For safe buffer handling
+
     bool is_master_mode;
-
-
-/*
- * Used to indicate the tx/rx status.
- * I2S controller hopes to start the tx and rx together,
- * also to stop them when they are both try to stop.
-*/
-    const struct rjn_i2s_pins *pins;
-    unsigned int bclk_ratio;
-    spinlock_t lock;
-
-    struct pinctrl *pinctrl;
-    struct pinctrl_state *bclk_on;
-    struct pinctrl_state *bclk_off;    
     
+    unsigned int bclk_ratio;   
 };
-
 
 static inline struct rjn_i2s_dev *to_info(struct snd_soc_dai *dai)
 {
 	return snd_soc_dai_get_drvdata(dai);
 }
 
-static irqreturn_t rjn_interrupt_handler(int irq, void *dev_id)
+static void rjn_i2s_fill_txfifo(struct rjn_i2s_dev *i2s)
+{
+ // Push remaining TX data into FIFO until full
+        while (i2s->tx_pos < i2s->tx_len) {
+            __u32 fifo_status;
+            regmap_read(i2s->regmap, IRQ_STATUS, &fifo_status);
+
+            if (fifo_status & IRQ_TX_FIFO_FULL)
+                break;
+
+            regmap_write(i2s->regmap, TX_FIFO, i2s->tx_buf[i2s->tx_pos]);
+            i2s->tx_pos++;
+        }
+
+        // Stop when done
+        if (i2s->tx_pos >= i2s->tx_len) {
+            i2s->tx_start = false;
+            regmap_update_bits(i2s->regmap, IRQ_ENABLE, IRQ_TX_FIFO_EMPTY | IRQ_TX_FIFO_FULL, 0);
+            regmap_update_bits(i2s->regmap, TX_CONFIG, TX_ENABLE_MASK, 0);
+        }
+
+    return;
+}
+
+static void rjn_i2s_drain_rxfifo(struct rjn_i2s_dev *i2s)
+{
+    // Pull data from RX FIFO until empty
+    while (i2s->rx_pos < i2s->rx_len) {
+        __u32 fifo_status;
+        regmap_read(i2s->regmap, IRQ_STATUS, &fifo_status);
+
+        if (fifo_status & IRQ_RX_FIFO_EMPTY)
+            break;
+
+        regmap_read(i2s->regmap, RX_FIFO, &i2s->rx_buf[i2s->rx_pos]);
+        i2s->rx_pos++;
+    }
+
+    // Stop when done
+    if (i2s->rx_pos >= i2s->rx_len) {
+        i2s->rx_start = false;
+        regmap_update_bits(i2s->regmap, IRQ_ENABLE, IRQ_RX_READY | IRQ_RX_FIFO_FULL, 0);
+        regmap_update_bits(i2s->regmap, RX_CONFIG, RX_ENABLE_MASK, 0);
+    }
+    return;
+}
+
+// --- IRQ Handler: handles both TX and RX events ---
+static irqreturn_t rjn_i2s_irq_handler(int irq, void *dev_id)
 {
     struct rjn_i2s_dev *i2s = dev_id;
-    u32 irq_status;
+    __u32 status;
 
-    // Read the IRQ status register
-    irq_status = readl(i2s->regs + IRQ_STATUS);
+    /* spin_lock_irqsave(&i2s->lock, flags);       //recheck */
 
-    // Check and log specific interrupt events
-    if (irq_status & IRQ_RX_READY_MASK)
-        dev_info(i2s->dev, "RX Ready interrupt occurred\n");
+    // Read IRQ status
+    regmap_read(i2s->regmap, IRQ_STATUS, &status);
 
-    if (irq_status & IRQ_TX_FIFO_EMPTY_MASK)
-        dev_info(i2s->dev, "TX FIFO Empty interrupt occurred\n");
-
-    if (irq_status & IRQ_TX_FIFO_UR_MASK)
-        dev_info(i2s->dev, "TX FIFO Underrun interrupt occurred\n");
-
-    if (irq_status & IRQ_RX_FIFO_OR_MASK)
-        dev_info(i2s->dev, "RX FIFO Overrun interrupt occurred\n");
-
-    // Clear only the handled interrupts by writing back the status
-    writel(irq_status, i2s->regs + IRQ_STATUS);
-
-    return IRQ_HANDLED;
-}
-
-
-static int rjn_snd_txctrl(struct rjn_i2s_dev *i2s, int enable)
-{
-    u32 val;
-    int ret;
-
-    ret = regmap_read(i2s->regmap, TX_CONFIG, &val);
-    if (ret)
-        return ret;
-
-    if (enable) {
-        val |= TX_ENABLE_MASK;
-        i2s->tx_start = true;
-
-        // Enable TX FIFO interrupts (minimal: Empty + Underrun)
-        ret = regmap_update_bits(i2s->regmap, IRQ_ENABLE,
-                                 IRQ_TX_FIFO_EMPTY_MASK | IRQ_TX_FIFO_UR_MASK,
-                                 IRQ_TX_FIFO_EMPTY_MASK | IRQ_TX_FIFO_UR_MASK);
-        if (ret)
-            return ret;
-    } else {
-        val &= ~TX_ENABLE_MASK;
-        i2s->tx_start = false;
-
-        // Disable TX interrupts
-        ret = regmap_update_bits(i2s->regmap, IRQ_ENABLE,
-                                 IRQ_TX_FIFO_EMPTY_MASK | IRQ_TX_FIFO_UR_MASK,
-                                 0);
-        if (ret)
-            return ret;
+    /* --- TX: Handle TX_FIFO_EMPTY and TX_FIFO_FULL --- */
+    if ((status & IRQ_TX_FIFO_EMPTY) && i2s->tx_start) {
+        // Clear IRQ
+        regmap_write(i2s->regmap, IRQ_STATUS, IRQ_TX_FIFO_EMPTY);
+        rjn_i2s_fill_txfifo(i2s);
+        return IRQ_HANDLED;
     }
 
-    return regmap_write(i2s->regmap, TX_CONFIG, val);
-}
-
-
-
-static int rjn_snd_rxctrl(struct rjn_i2s_dev *i2s, int enable)
-{
-    u32 val;
-    int ret;
-
-    ret = regmap_read(i2s->regmap, RX_CONFIG, &val);
-    if (ret)
-        return ret;
-
-    if (enable) {
-        val |= RX_ENABLE_MASK;
-        i2s->rx_start = true;
-
-        // Enable RX FIFO interrupts (minimal: Data Ready + Overrun)
-        ret = regmap_update_bits(i2s->regmap, IRQ_ENABLE,
-                                 IRQ_RX_READY_MASK | IRQ_RX_FIFO_OR_MASK,
-                                 IRQ_RX_READY_MASK | IRQ_RX_FIFO_OR_MASK);
-        if (ret)
-            return ret;
-    } else {
-        val &= ~RX_ENABLE_MASK;
-        i2s->rx_start = false;
-
-        // Disable RX interrupts
-        ret = regmap_update_bits(i2s->regmap, IRQ_ENABLE,
-                                 IRQ_RX_READY_MASK | IRQ_RX_FIFO_OR_MASK,
-                                 0);
-        if (ret)
-            return ret;
+    /* --- TX: Handle TX_FIFO_TT  --- */
+    if ((status & IRQ_TX_FIFO_TT) && i2s->tx_start) {
+        // Clear IRQ
+        regmap_write(i2s->regmap, IRQ_STATUS, IRQ_TX_FIFO_TT);
+        rjn_i2s_fill_txfifo(i2s);
+        return IRQ_HANDLED;
     }
 
-    return regmap_write(i2s->regmap, RX_CONFIG, val);
+    /*--- RX: Handle RX_READY ---*/
+    if ((status & (IRQ_RX_READY )) && i2s->rx_start) {
+        // Clear IRQ
+        regmap_write(i2s->regmap, IRQ_STATUS, IRQ_RX_READY);
+        rjn_i2s_drain_rxfifo(i2s);
+        return IRQ_HANDLED;
+    }
+    /*--- RX: Handle RX_FIFO_FULL ---*/
+    if ((status & (IRQ_RX_FIFO_FULL)) && i2s->rx_start) {
+        // Clear IRQ
+        regmap_write(i2s->regmap, IRQ_STATUS, IRQ_RX_FIFO_FULL);
+        rjn_i2s_drain_rxfifo(i2s);
+        return IRQ_HANDLED;
+    }
+
+
+    /*spin_unlock_irqrestore(&i2s->lock, flags);*/
+    return IRQ_NONE;
 }
 
-//initialized DMA in dai probe 
-static int rjn_i2s_dai_probe(struct snd_soc_dai *dai)
+/* --- ALSA Trigger: Starts or Stops Playback/Capture --- */
+static int rjn_i2s_trigger(struct snd_pcm_substream *substream, int cmd, struct snd_soc_dai *dai)
 {
-    //setting addresses for playback and capture
-    //1.take dai driver data from platform driver
     struct rjn_i2s_dev *i2s = snd_soc_dai_get_drvdata(dai);
-    //set DMA Data
-    snd_soc_dai_init_dma_data(dai,i2s->has_playback ? &i2s->playback_dma_data : NULL, 
-                                i2s->has_capture ? &i2s->capture_dma_data : NULL);
-    
-    return 0;
+    int ret = 0;
+
+    switch (cmd) {
+    case SNDRV_PCM_TRIGGER_START:
+        // Enable master clock
+        clk_prepare_enable(i2s->mclk);
+
+        if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+            // Playback (TX) case
+            i2s->tx_buf = (__u32 *)substream->runtime->dma_area;        // Pointer to playback buffer
+            i2s->tx_len = substream->runtime->buffer_size / snd_pcm_format_width(substream->runtime->format); // Total samples to send
+            i2s->tx_pos = 0;                                             // Reset TX buffer index
+            i2s->tx_start = true;                                        // Mark TX active
+
+            // Enable both TX FIFO empty and TX FIFO full interrupts
+            regmap_update_bits(i2s->regmap, IRQ_ENABLE, IRQ_TX_FIFO_EMPTY | IRQ_TX_FIFO_TT , IRQ_TX_FIFO_EMPTY| IRQ_TX_FIFO_TT );
+            regmap_update_bits(i2s->regmap, TX_CONFIG, TX_ENABLE_MASK, TX_ENABLE_MASK);
+        } else if(substream->stream == SNDRV_PCM_STREAM_CAPTURE){
+            // Capture (RX) case
+            i2s->rx_buf = (__u32 *)substream->runtime->dma_area;        // Pointer to capture buffer
+            i2s->rx_len = substream->runtime->buffer_size / sizeof(__u32); // Total samples to receive
+            i2s->rx_pos = 0;                                             // Reset RX buffer index
+            i2s->rx_start = true;                                        // Mark RX active
+
+            // Enable both RX FIFO ready and RX FIFO empty interrupts
+            regmap_update_bits(i2s->regmap, IRQ_ENABLE, IRQ_RX_READY | IRQ_RX_FIFO_FULL , IRQ_RX_READY | IRQ_RX_FIFO_FULL);
+            regmap_update_bits(i2s->regmap, RX_CONFIG, RX_ENABLE_MASK, RX_ENABLE_MASK);
+        }
+        else 
+        return -EINVAL;
+        break;
+
+    case SNDRV_PCM_TRIGGER_STOP:
+        // Stop playback/capture based on direction
+        if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK){
+            i2s->tx_start = false;
+            regmap_update_bits(i2s->regmap, IRQ_ENABLE, IRQ_TX_FIFO_EMPTY | IRQ_TX_FIFO_TT, 0); // Disable TX IRQs
+            regmap_update_bits(i2s->regmap, TX_CONFIG, TX_ENABLE_MASK, 0);    // Disable TX block
+        } else {
+            i2s->rx_start = false;
+            regmap_update_bits(i2s->regmap, IRQ_ENABLE, IRQ_RX_READY | IRQ_RX_FIFO_FULL, 0); // Disable RX IRQs
+            regmap_update_bits(i2s->regmap, RX_CONFIG, RX_ENABLE_MASK, 0);     // Disable RX block
+        }
+
+        // Disable master clock
+        clk_disable_unprepare(i2s->mclk);
+        break;
+
+    default:
+        ret = -EINVAL; // Invalid command
+        break;
+    }
+
+    return ret;
 }
 
 static int rjn_i2s_dai_hw_params(struct snd_pcm_substream *substream,
@@ -202,56 +241,68 @@ static int rjn_i2s_dai_hw_params(struct snd_pcm_substream *substream,
 
         regmap_update_bits(i2s->regmap, TX_PRESCALER,
                            TX_MCLK_DIV_MASK | TX_I2S_DIV_MASK,
-                           (1 << TX_MCLK_DIV) | (div_bclk << TX_I2S_DIV));
+                           (0x01 << TX_MCLK_DIV) | (div_bclk << TX_I2S_DIV));
 
         regmap_update_bits(i2s->regmap, RX_PRESCALER,
                            RX_MCLK_DIV_MASK | RX_I2S_DIV_MASK,
-                           (1 << RX_MCLK_DIV) | (div_bclk << RX_I2S_DIV));
+                           (0x01 << RX_MCLK_DIV) | (div_bclk << RX_I2S_DIV));
     }
 
-    // Format (data width)
+    // Format (data width and channel width)
     switch (params_format(params)) {
-    case SNDRV_PCM_FORMAT_S8:
-        val_tx |= (8 << TX_DATA_WIDTH);
-        val_rx |= (8 << RX_DATA_WIDTH);
-        break;
-    case SNDRV_PCM_FORMAT_S16_LE:
-        val_tx |= (16 << TX_DATA_WIDTH);
-        val_rx |= (16 << RX_DATA_WIDTH);
-        break;
-    case SNDRV_PCM_FORMAT_S20_3LE:
-        val_tx |= (20 << TX_DATA_WIDTH);
-        val_rx |= (20 << RX_DATA_WIDTH);
-        break;
-    case SNDRV_PCM_FORMAT_S24_LE:
-        val_tx |= (24 << TX_DATA_WIDTH);
-        val_rx |= (24 << RX_DATA_WIDTH);
-        break;
-    case SNDRV_PCM_FORMAT_S32_LE:
-        val_tx |= (32 << TX_DATA_WIDTH);
-        val_rx |= (32 << RX_DATA_WIDTH);
-        break;
-    default:
-        return -EINVAL;
+        case SNDRV_PCM_FORMAT_S8:
+            val_tx |= (_8_BIT << TX_DATA_WIDTH);
+            val_rx |= (_8_BIT << RX_DATA_WIDTH);
+            val_tx |= (_8_BIT << TX_CHANNEL_WIDTH); 
+            val_rx |= (_8_BIT << RX_CHANNEL_WIDTH);
+            break;
+
+        case SNDRV_PCM_FORMAT_S16_LE:
+            val_tx |= (_16_BIT << TX_DATA_WIDTH);
+            val_rx |= (_16_BIT << RX_DATA_WIDTH);
+            val_tx |= (_16_BIT << TX_CHANNEL_WIDTH); 
+            val_rx |= (_16_BIT << RX_CHANNEL_WIDTH);
+            break;
+
+        case SNDRV_PCM_FORMAT_S24_LE:
+            val_tx |= (_24_BIT << TX_DATA_WIDTH);
+            val_rx |= (_24_BIT << RX_DATA_WIDTH);
+            val_tx |= (_24_BIT << TX_CHANNEL_WIDTH); 
+            val_rx |= (_24_BIT << RX_CHANNEL_WIDTH);
+            break;
+
+        case SNDRV_PCM_FORMAT_S32_LE:
+            val_tx |= (_32_BIT << TX_DATA_WIDTH);
+            val_rx |= (_32_BIT << RX_DATA_WIDTH);
+            val_tx |= (_32_BIT << TX_CHANNEL_WIDTH); 
+            val_rx |= (_32_BIT << RX_CHANNEL_WIDTH);
+            break;
+
+        default:
+            return -EINVAL;
     }
 
     //No of Channels
     switch (params_channels(params)) {
     case 8:
-        val_tx |= (8 << TX_NUM_CHANNELS);
-        val_rx |= (8 << RX_NUM_CHANNELS);
+        val_tx |= (_8_CHANNEL << TX_NUM_CHANNELS);
+        val_rx |= (_8_CHANNEL << RX_NUM_CHANNELS);
         break;
     case 6:
-        val_tx |= (6 << TX_NUM_CHANNELS);
-        val_rx |= (6 << RX_NUM_CHANNELS);
+        val_tx |= (_6_CHANNEL << TX_NUM_CHANNELS);
+        val_rx |= (_6_CHANNEL << RX_NUM_CHANNELS);
         break;
     case 4:
-        val_tx |= (4 << TX_NUM_CHANNELS);
-        val_rx |= (4 << RX_NUM_CHANNELS);
+        val_tx |= (_4_CHANNEL << TX_NUM_CHANNELS);
+        val_rx |= (_4_CHANNEL << RX_NUM_CHANNELS);
         break;
     case 2:
-        val_tx |= (2 << TX_NUM_CHANNELS);
-        val_rx |= (2 << RX_NUM_CHANNELS);
+        val_tx |= (_2_CHANNEL << TX_NUM_CHANNELS);
+        val_rx |= (_2_CHANNEL << RX_NUM_CHANNELS);
+        break;
+    case 1:
+        val_tx |= (_1_CHANNEL << TX_NUM_CHANNELS);
+        val_rx |= (_1_CHANNEL << RX_NUM_CHANNELS);
         break;
     default:
         dev_err(i2s->dev, "Invalid channel count: %d\n", params_channels(params));
@@ -259,25 +310,23 @@ static int rjn_i2s_dai_hw_params(struct snd_pcm_substream *substream,
     }
 
     // Common fields 
-    val_tx |= (1 << TX_ENABLE) | (31 << TX_CHANNEL_WIDTH) |
-              (0 << TX_PROTO_MODE) | (0 << TX_BIT_ORDER);
+    val_tx |= (I2S_MODE << TX_PROTO_MODE) | (MSB_BIT_ORDER << TX_BIT_ORDER) |(1<<TX_PADDING);
 
-    val_rx |= (1 << RX_ENABLE) | (31 << RX_CHANNEL_WIDTH) |
-              (0 << RX_PROTO_MODE) | (0 << RX_BIT_ORDER);
+    val_rx |= (I2S_MODE << RX_PROTO_MODE) | (MSB_BIT_ORDER << RX_BIT_ORDER);
 
     // Final register write
     if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
         regmap_update_bits(i2s->regmap, RX_CONFIG,
             RX_NUM_CHANNELS_MASK | RX_DATA_WIDTH_MASK |
             RX_CHANNEL_WIDTH_MASK | RX_PROTO_MODE_MASK |
-            RX_BIT_ORDER_MASK | RX_ENABLE_MASK,
+            RX_BIT_ORDER_MASK ,
             val_rx);
     }
     else {
         regmap_update_bits(i2s->regmap, TX_CONFIG,
             TX_NUM_CHANNELS_MASK | TX_DATA_WIDTH_MASK |
             TX_CHANNEL_WIDTH_MASK | TX_PROTO_MODE_MASK |
-            TX_BIT_ORDER_MASK | TX_ENABLE_MASK,
+            TX_BIT_ORDER_MASK | TX_PADDING_MASK , 
             val_tx);
     }
 
@@ -356,10 +405,10 @@ int rjn_i2s_set_fmt(struct snd_soc_dai *dai,unsigned int fmt)
     case SND_SOC_DAIFMT_IB_IF:  // Inverted BCLK + Inverted LRCLK
         val_tx = (1 << TX_CLK_POL);
         val_rx = (1 << RX_CLK_POL);
-        dev_warn(i2s->dev, "Frame clock (LRCLK) inversion not supported, ignoring\n");
         break;
 
     default:
+        dev_warn(i2s->dev, "Frame clock (LRCLK) inversion not supported, ignoring\n");
         return -EINVAL;
     }
 
@@ -396,56 +445,7 @@ int rjn_i2s_set_fmt(struct snd_soc_dai *dai,unsigned int fmt)
     return ret;
 }
 
-
-//responsible for communication
-static int rjn_i2s_trigger(struct snd_pcm_substream *substream,int cmd,struct snd_soc_dai *dai)
-{
-    struct rjn_i2s_dev *i2s = to_info(dai);
-    int ret =0;
-    
-    switch(cmd)
-    {
-        case SNDRV_PCM_TRIGGER_START:
-        case SNDRV_PCM_TRIGGER_RESUME:
-        case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-            if(substream->stream == SNDRV_PCM_STREAM_CAPTURE)
-                ret = rjn_snd_rxctrl(i2s,1);
-            else 
-                ret = rjn_snd_txctrl(i2s,1);
-            if(ret<0)
-                return ret;
-                clk_prepare_enable(i2s->mclk);
-                clk_prepare_enable(i2s->bus_clk);
-            break;
-        case SNDRV_PCM_TRIGGER_SUSPEND:
-        case SNDRV_PCM_TRIGGER_STOP:
-        case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-            if(substream->stream == SNDRV_PCM_STREAM_CAPTURE){
-                if(!i2s->tx_start)
-                {
-                clk_disable_unprepare(i2s->mclk);
-                clk_disable_unprepare(i2s->bus_clk);
-                }
-            ret = rjn_snd_rxctrl(i2s,0);
-            }
-            else{
-                if(!i2s->rx_start)
-                {
-                clk_disable_unprepare(i2s->mclk);
-                clk_disable_unprepare(i2s->bus_clk);
-                }
-                ret = rjn_snd_txctrl(i2s,0);
-            }
-            break;
-        default:
-            ret = -EINVAL;
-            break;
-    }
-    return ret;
-}
-
 static const struct snd_soc_dai_ops rjn_i2s_dai_ops = {
-    .probe = rjn_i2s_dai_probe,
     .hw_params = rjn_i2s_dai_hw_params,
     .set_bclk_ratio = rjn_i2s_dai_bclk_ratio,
     .set_sysclk = rjn_i2s_set_sysclk,
@@ -460,6 +460,21 @@ static const struct snd_soc_dai_ops rjn_i2s_dai_ops = {
  * - Playback & Capture capabilities
  */
 static struct snd_soc_dai_driver rjn_i2s_dai = {
+    .name = "rjn-i2s-dai",
+    .playback = {
+        .stream_name = "Playback",
+        .channels_min = 1,
+        .channels_max = 8,
+        .rates = SNDRV_PCM_RATE_8000_192000,
+        .formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S32_LE,
+    },
+    .capture = {
+        .stream_name = "Capture",
+        .channels_min = 1,
+        .channels_max = 8,
+        .rates = SNDRV_PCM_RATE_8000_192000,
+        .formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S32_LE,
+    },
     .ops = &rjn_i2s_dai_ops,
     .symmetric_rate = 1,
 };
@@ -554,77 +569,7 @@ static const struct of_device_id rjn_i2s_match[] =
     {},
 };
 
-/*Preparing DMA for playback and capture for i2s*/
-static int rjn_i2s_init_dai(struct rjn_i2s_dev *i2s ,struct resource *res,struct snd_soc_dai_driver **dp)
-{
-    struct device_node *node = i2s->dev->of_node;
-    struct snd_soc_dai_driver *dai;
-    struct property *dma_names;
-    const char *dma_name;
-    unsigned int val;
-
-    //checking for dma in dts
-    /*
-    of_property_for_each_string(node,"dma-names",dma_names,dma_name)
-    {
-        if(!strcmp(dma_name, "tx"))
-            i2s->has_playback = true;
-        if(!strcmp(dma_name ,"rx"))
-            i2s->has_capture = true;
-    }
-    */
-    i2s->has_playback = true;
-    i2s->has_capture = true;
-
-    dai = devm_kmemdup(i2s->dev, &rjn_i2s_dai, sizeof(*dai),GFP_KERNEL);
-    if(!dai)
-    {
-        return -ENOMEM;
-    }
-
-    //prepare TX DMA for playback
-    if(i2s->has_playback)
-    {
-        dai->playback.stream_name = "Playback";
-        dai->playback.channels_min = 1;
-        dai->playback.channels_max = 2;
-        dai->playback.rates = SNDRV_PCM_RATE_8000_192000;
-        dai->playback.formats = SNDRV_PCM_FMTBIT_S8	 |
-                                SNDRV_PCM_FMTBIT_S16_LE |
-                                SNDRV_PCM_FMTBIT_S20_3LE |
-                                SNDRV_PCM_FMTBIT_S32_LE;
-
-        i2s->playback_dma_data.addr = res->start + TX_FIFO;
-       // i2s->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES; //same as for our SOC
-        i2s->playback_dma_data.maxburst = 8;  //at a time how many words can read or write
-    }
-
-    //prepare RX stream (for ALSA pcm layer not actual DMA) for capture
-    if(i2s->has_capture)
-    {
-        dai->capture.stream_name = "Capture";
-        dai->capture.channels_min = 1;
-        dai->capture.channels_max = 2;
-        dai->capture.rates = SNDRV_PCM_RATE_8000_192000;
-        dai->capture.formats = SNDRV_PCM_FMTBIT_S8	 |
-                                SNDRV_PCM_FMTBIT_S16_LE |
-                                SNDRV_PCM_FMTBIT_S20_3LE |
-                                SNDRV_PCM_FMTBIT_S32_LE |
-                                SNDRV_PCM_FMTBIT_S32_LE;
-
-        i2s->playback_dma_data.addr = res->start + RX_FIFO;
-        //i2s->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES; //only for DMA
-        i2s->playback_dma_data.maxburst = 8;
-
-    }
-    //link dai with platform dai
-    if(dp)
-    *dp = dai;
-    //on sucess return zero
-    return 0;
-}
-
-static void rjn_i2s_init(rjn_i2s_dev *i2s_dev)
+static void rjn_i2s_init(struct rjn_i2s_dev *i2s_dev)
 {
     /********Enable TX and RX in I2S**********/
     regmap_update_bits(i2s_dev->regmap,TX_CONFIG,TX_ENABLE_MASK,TX_ENABLE_MASK);
@@ -633,21 +578,19 @@ static void rjn_i2s_init(rjn_i2s_dev *i2s_dev)
     /********set threshould value for FIFO*********/
     regmap_update_bits(i2s_dev->regmap,FIFO_THRESHOLD,
                         RX_FIFO_THRESHOLD_MASK|TX_FIFO_THRESHOLD_MASK,
-                        64<<RX_FIFO_THRESHOLD|64<<TX_FIFO_THRESHOLD);
+                        0x40<<RX_FIFO_THRESHOLD|0x40<<TX_FIFO_THRESHOLD);
 
     /********set SOC_TIMEOUT value for TIMEOUT register***********/
-    regmap_write(i2s_dev->regmap,SOC_TIMEOUT,64);
+    regmap_write(i2s_dev->regmap,SOC_TIMEOUT,0x40);
 }
 
 // Probe Function: Initializes the I2S Controller 
 static int rjn_i2s_probe(struct platform_device *pdev)
 {
-    struct device_node *node = pdev->dev.of_node;
     struct rjn_i2s_dev *i2s_dev;
-    struct snd_soc_dai_driver *dai;
     struct resource *res;
     void __iomem *regs;
-    int irq,ret;
+    int ret;
 
     // Allocate memory to private data structure
     i2s_dev = devm_kzalloc(&pdev->dev , sizeof(*i2s_dev), GFP_KERNEL);
@@ -664,17 +607,8 @@ static int rjn_i2s_probe(struct platform_device *pdev)
     }
 
     // Clock configuration
-    //get bus_clk from Device tree
-    i2s_dev->bus_clk = devm_clk_get(&pdev->dev, "bus_clk");
-    if(IS_ERR(i2s_dev->bus_clk))
-    {
-        dev_err(&pdev->dev , "Can't retreive i2s bus clock\n");
-        return PTR_ERR(i2s_dev->bus_clk);
-    }
-    //prepare and enable bus_clk is not required because it already enabled by apb
-
     //get mclk from Device tree
-    i2s_dev->mclk = devm_clk_get(&pdev->dev, "I2S_Master_C");
+    i2s_dev->mclk = devm_clk_get(&pdev->dev, "i2s_clock");
     if(IS_ERR(i2s_dev->mclk))
     {
         dev_err(&pdev->dev , "Can't retreive i2s master clock\n");
@@ -689,14 +623,14 @@ static int rjn_i2s_probe(struct platform_device *pdev)
     }
 
     //request irq
-    irq = platform_get_irq(pdev,0);
-    if(irq<0)
+    i2s_dev->irq = platform_get_irq(pdev,0);
+    if(i2s_dev->irq<0)
     {
         dev_err(&pdev->dev, "request irq error\n");
         return ret;
     }
 
-    ret = devm_request_irq(&pdev->dev, irq, rjn_interrupt_handler, 0, dev_name(&pdev->dev), &pdev->dev);
+    ret = devm_request_irq(&pdev->dev, i2s_dev->irq , rjn_i2s_irq_handler, 0, dev_name(&pdev->dev), &pdev->dev);
 
     if(ret<0)
     {
@@ -717,39 +651,25 @@ static int rjn_i2s_probe(struct platform_device *pdev)
 	    }
 
     i2s_dev->dev = &pdev->dev;
+    i2s_dev->is_master_mode = true; //setting flag for master mode
 
     //set private data structure with platform device structure
     platform_set_drvdata(pdev,i2s_dev);
 
     //init i2s
-    rjn_init_i2s(i2s_dev);
-    //initialize dai driver setup
-    ret = rjn_i2s_init_dai(i2s_dev,res,&dai);
-    if(ret)
-    {
-        goto err_clk;
-    }
+    rjn_i2s_init(i2s_dev);
 
     //register component driver/DAI hardware (to inform ALSA)
-    ret = devm_snd_soc_register_component(&pdev->dev,&rjn_i2s_cmpt_drv,dai,0);
+    ret = devm_snd_soc_register_component(&pdev->dev,&rjn_i2s_cmpt_drv,&rjn_i2s_dai,0);
     if(ret)
     {
          dev_err(&pdev->dev, "Could not register DAI \n");
 	    	goto err_suspend;
     }
 
-    //register pcm for default dma for user level app
-    ret = devm_snd_dmaengine_pcm_register(&pdev->dev,NULL,0);   
-    if(ret)
-    {
-        dev_err(&pdev->dev, "Could not register PCM\n");
-        goto err_suspend;
-    }
-
     err_suspend:
     // i2s_runtime_suspend(&pdev->dev);
     err_clk:
-        clk_disable_unprepare(i2s_dev->bus_clk);
         clk_disable_unprepare(i2s_dev->mclk);
     return 0;
 }
@@ -758,7 +678,6 @@ static int rjn_i2s_probe(struct platform_device *pdev)
 static void rjn_i2s_remove(struct platform_device *pdev)
 {
     struct rjn_i2s_dev *i2s_dev = platform_get_drvdata(pdev);
-    clk_disable_unprepare(i2s_dev->bus_clk);
     clk_disable_unprepare(i2s_dev->mclk);
    // return 0;
 }

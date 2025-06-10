@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
     else printf("snd_pcm_open:sucessfully");
 
     // Allocate hardware parameters
-    snd_pcm_hw_params_malloc(&params); //allocating memory
+    snd_pcm_hw_params_malloc(&params); //allocating memory to struct snd_pcm_hw_params_t
     snd_pcm_hw_params_any(pcm_handle, params); //initializes structure params
 
     // Set hardware parameters
@@ -72,7 +72,7 @@ int main(int argc, char *argv[]) {
 
     // Playback loop
     while (fread(data, 1, size, wav_file) > 0) {
-        pcm = snd_pcm_writei(pcm_handle, data, frames);
+        pcm = snd_pcm_writei(pcm_handle,data, frames);
         if (pcm == -EPIPE) {
             fprintf(stderr, "XRUN.\n");
             snd_pcm_prepare(pcm_handle);
